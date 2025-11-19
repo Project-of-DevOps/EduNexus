@@ -1,4 +1,4 @@
-
+//YAYYYYYY!!
 import { Student, Teacher, Parent, Dean, UserRole, Class, AttendanceRecord, Mark, Announcement, Institute, Department, Message, Task, StudentTask } from '../types';
 
 export const mockInstitutes: Institute[] = [
