@@ -1,0 +1,30 @@
+[
+  {
+    "id": "student_guest",
+    "name": "Guest Student",
+    "email": "student.guest@edunexus.local",
+    "password": "student123",
+    "role": "student",
+    "classId": "local-101",
+    "parentId": "parent_guest"
+  },
+  {
+    "id": "teacher_guest",
+    "name": "Guest Teacher",
+    "email": "teacher.guest@edunexus.local",
+    "password": "teacher123",
+    "role": "teacher",
+    "title": "subject-teacher",
+    "subjects": ["Data Structures", "Algorithms"],
+    "department": "Local Dept",
+    "instituteId": "local-inst"
+  },
+  {
+    "id": "parent_guest",
+    "name": "Guest Parent",
+    "email": "parent.guest@edunexus.local",
+    "password": "parent123",
+    "role": "parent",
+    "childIds": ["student_guest"]
+  }
+]

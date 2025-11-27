@@ -1,0 +1,15 @@
+Parent:
+  email: parent.guest@edunexus.local
+  password: parent123
+
+Teacher:
+  email: teacher.guest@edunexus.local
+  password: teacher123
+  title: subject-teacher
+  subjects: Data Structures, Algorithms
+
+Student:
+  email: student.guest@edunexus.local
+  password: student123
+
+These are the single dummy credentials used during local development. Replace with real accounts once your backend is ready.

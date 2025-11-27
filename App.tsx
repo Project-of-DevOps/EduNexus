@@ -2,15 +2,15 @@
 import React from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import { DataProvider } from './context/DataContext';
+import { DataProvider, DataPersistence } from './context/DataContext';
 import { ThemeProvider } from './context/ThemeContext';
 import LoginPage from './pages/Login';
 import Dashboard from './pages/Dashboard';
 
 const App: React.FC = () => {
   return (
-    <AuthProvider>
-      <DataProvider>
+    <DataProvider>
+      <AuthProvider>
         <ThemeProvider>
           <HashRouter>
             <Routes>
@@ -27,8 +27,9 @@ const App: React.FC = () => {
             </Routes>
           </HashRouter>
         </ThemeProvider>
-      </DataProvider>
-    </AuthProvider>
+        <DataPersistence />
+      </AuthProvider>
+    </DataProvider>
   );
 };
 

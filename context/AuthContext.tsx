@@ -1,11 +1,14 @@
 
 import React, { createContext, useState, useContext, ReactNode } from 'react';
 import { LoggedInUser, UserRole, Student, Teacher, Parent } from '../types';
-import { mockUsers } from '../data/mock';
+import { findDummyUser } from '../data/loginDummyUsers';
+import { useData } from './DataContext';
 
 interface AuthContextType {
   user: LoggedInUser | null;
-  login: (email: string, role: UserRole) => boolean;
+  login: (email: string, password: string, role: UserRole) => boolean;
+  signUp: (name: string, email: string, password: string, role: UserRole, extra?: Record<string, any>) => boolean;
+  updateProfile: (patch: Partial<LoggedInUser>) => void;
   logout: () => void;
   signUpAsGuest: (role: UserRole) => void;
 }
@@ -15,63 +18,102 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<LoggedInUser | null>(null);
 
-  const login = (email: string, role: UserRole) => {
-    // In a real app, this would be an API call. We use mock data here.
-    // Parent login uses the child's email.
-    const userToFind = mockUsers.find(
-      (u) => u.email.toLowerCase() === email.toLowerCase() && (u.role === role || (role === UserRole.Parent && u.role === UserRole.Student))
-    );
-    
-    if (userToFind) {
-      if (role === UserRole.Parent) {
-         const parentUser = mockUsers.find(u => u.role === UserRole.Parent && u.email.toLowerCase() === email.toLowerCase());
-         if(parentUser) {
-            setUser(parentUser as LoggedInUser);
-            return true;
-         }
-      } else {
-        setUser(userToFind as LoggedInUser);
-        return true;
-      }
+  const { users, addUser, updateUser } = useData();
+
+  const login = (email: string, password: string, role: UserRole) => {
+    // First check any users stored in DataContext (created via sign up)
+    const existing = users.find(u => u.email.toLowerCase() === email.toLowerCase() && u.role === role) as (LoggedInUser & { password?: string }) | undefined;
+    if (existing) {
+      if ((existing as any).password && (existing as any).password !== password) return false;
+      setUser(existing);
+      return true;
     }
-    
-    // Dean can also login via teacher portal
-    if (role === UserRole.Teacher) {
-      const deanUser = mockUsers.find(u => u.email.toLowerCase() === email.toLowerCase() && u.role === UserRole.Dean);
-      if(deanUser) {
-        setUser(deanUser as LoggedInUser);
-        return true;
-      }
+    // For now we validate against the small dummy login list so devs can build the
+    // application without a backend. Passwords are stored in-memory only.
+    const found = findDummyUser(email, role);
+    if (!found) return false;
+    // If the dummy record contains a password — check it.
+    if (found.password && found.password !== password) return false;
+
+    // Build a minimal LoggedInUser from the dummy record
+    const base: Partial<LoggedInUser> = {
+      id: found.id || `user_${Date.now()}`,
+      name: found.name || 'Guest User',
+      email: found.email || '',
+      role: found.role as UserRole,
+    };
+
+    // Map role specific fields
+    if (found.role === UserRole.Student) {
+      setUser({ ...(base as any), parentId: (found as any).parentId || '', classId: (found as any).classId || '' } as Student);
+    } else if (found.role === UserRole.Teacher) {
+      // include title/subjects when available on dummy entries
+      setUser({ ...(base as any), department: (found as any).department || '', instituteId: (found as any).instituteId || '', reportingToId: (found as any).reportingToId || '', title: (found as any).title, subjects: (found as any).subjects } as Teacher);
+    } else if (found.role === UserRole.Parent) {
+      setUser({ ...(base as any), childIds: (found as any).childIds || [] } as Parent);
+    } else {
+      // default fallback
+      setUser(base as LoggedInUser);
     }
 
-    return false;
+    return true;
   };
 
   const signUpAsGuest = (role: UserRole) => {
-    let guestUser: LoggedInUser | undefined;
-    switch (role) {
-      case UserRole.Teacher:
-        guestUser = mockUsers.find(u => u.id === 'teacher1') as Teacher;
-        break;
-      case UserRole.Parent:
-        guestUser = mockUsers.find(u => u.id === 'parent1') as Parent;
-        break;
-      case UserRole.Student:
-      default:
-        guestUser = mockUsers.find(u => u.id === 'student1') as Student;
-        break;
+    // Create a minimal 'new' user for the chosen role — this avoids reaching
+    // into the large mock dataset and ensures the app behaves like a real signup
+    // flow that would create a user in a backend.
+    const newId = `${role}_${Date.now()}`;
+    if (role === UserRole.Student) {
+      setUser({ id: newId, name: 'New Student', email: `${newId}@edunexus.local`, role, parentId: '', classId: '' });
+    } else if (role === UserRole.Teacher) {
+      setUser({ id: newId, name: 'New Teacher', email: `${newId}@edunexus.local`, role, department: '', instituteId: '', reportingToId: '' });
+    } else if (role === UserRole.Parent) {
+      setUser({ id: newId, name: 'New Parent', email: `${newId}@edunexus.local`, role, childIds: [] });
+    } else {
+      setUser({ id: newId, name: 'New User', email: `${newId}@edunexus.local`, role } as LoggedInUser);
     }
-    if (guestUser) {
-      setUser(guestUser);
+  };
+
+  const signUp = (name: string, email: string, password: string, role: UserRole, extra: Record<string, any> = {}) => {
+    // Prevent duplicate emails
+    const exists = users.find(u => u.email.toLowerCase() === email.toLowerCase());
+    if (exists) return false;
+
+    const newId = `${role}_${Date.now()}`;
+    const base: any = { id: newId, name, email, role, password, ...extra };
+
+    // role specific defaults
+    if (role === UserRole.Student) {
+      base.parentId = extra.parentId || '';
+      base.classId = extra.classId || '';
+    } else if (role === UserRole.Teacher) {
+      base.department = extra.department || '';
+      base.instituteId = extra.instituteId || '';
+      base.reportingToId = extra.reportingToId || '';
+    } else if (role === UserRole.Parent) {
+      base.childIds = extra.childIds || [];
     }
+
+    addUser(base);
+    setUser(base as LoggedInUser);
+    return true;
   };
 
   const logout = () => {
     setUser(null);
   };
+  
+  const updateProfile = (patch: Partial<LoggedInUser>) => {
+    if (!user) return;
+    // update in DataContext store
+    updateUser(user.id, patch);
+    // update local auth user state
+    setUser(prev => prev ? ({ ...prev, ...patch } as LoggedInUser) : prev);
+  };
 
   return (
-    <AuthContext.Provider value={{ user, login, logout, signUpAsGuest }}>
+    <AuthContext.Provider value={{ user, login, logout, signUpAsGuest, signUp, updateProfile }}>
       {children}
     </AuthContext.Provider>
   );

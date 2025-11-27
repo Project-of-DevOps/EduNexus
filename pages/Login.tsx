@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { UserRole, Dean } from '../types';
 import { ROLES } from '../constants';
-import { mockInstitutes, mockDepartments, mockUsers } from '../data/mock';
+// NOTE: We no longer rely on large mock datasets for auth. A small login dummy list
+// lives in `data/loginDummyUsers` and AuthContext handles the rest for local development.
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Card from '../components/ui/Card';
@@ -13,6 +14,7 @@ const LoginPage: React.FC = () => {
   const [activeRole, setActiveRole] = useState<UserRole>(UserRole.Student);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [instituteName, setInstituteName] = useState('');
   const [error, setError] = useState('');
   
   // State for teacher hierarchy
@@ -22,7 +24,7 @@ const LoginPage: React.FC = () => {
   const [selectedHodId, setSelectedHodId] = useState('');
 
   const navigate = useNavigate();
-  const { login, signUpAsGuest } = useAuth();
+  const { login, signUp } = useAuth();
 
   // Reset hierarchy on role change
   useEffect(() => {
@@ -38,16 +40,60 @@ const LoginPage: React.FC = () => {
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    if (login(email, activeRole)) {
+    // institute name is collected for auditing/tenant selection later.
+    if (login(email, password, activeRole)) {
       navigate('/dashboard');
     } else {
       setError('Invalid credentials. Please try again.');
     }
   };
 
-  const handleSignUp = () => {
-    signUpAsGuest(activeRole);
-    navigate('/dashboard');
+  const [showSignUp, setShowSignUp] = useState(false);
+  const [signName, setSignName] = useState('');
+  const [signEmail, setSignEmail] = useState('');
+  const [signPassword, setSignPassword] = useState('');
+  const [teacherTitle, setTeacherTitle] = useState('subject-teacher');
+  const [newSubject, setNewSubject] = useState('');
+  const [signSubjects, setSignSubjects] = useState<string[]>([]);
+  const [signClassId, setSignClassId] = useState('');
+  const [signError, setSignError] = useState('');
+
+  const handleSignUpClick = () => {
+    // Open the inline sign-up form instead of auto-creating a guest user.
+    setShowSignUp(true);
+  };
+
+  const handleSignUpSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setSignError('');
+    if (!signName || !signEmail || !signPassword) {
+      setSignError('Please fill name, email and password.');
+      return;
+    }
+
+    // Teacher-specific checks
+    if (activeRole === UserRole.Teacher) {
+      if (teacherTitle === 'class-teacher' && !signClassId) {
+        setSignError('Class ID is required for Class Teacher.');
+        return;
+      }
+    }
+
+      // Build extras for teacher role
+      const extras: Record<string, any> = {};
+      if (instituteName) extras.instituteName = instituteName;
+      if (activeRole === UserRole.Teacher) {
+        extras.title = teacherTitle;
+        extras.subjects = signSubjects;
+        if (teacherTitle === 'class-teacher' && signClassId) extras.classId = signClassId;
+      }
+
+      const ok = signUp(signName, signEmail, signPassword, activeRole, extras);
+    if (ok) {
+      navigate('/dashboard');
+    } else {
+      setSignError('Sign-up failed (email may already exist).');
+    }
   };
 
   const handleInstituteChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -64,13 +110,8 @@ const LoginPage: React.FC = () => {
   };
 
   // Memoized data for dropdowns
-  const departmentsForInstitute = useMemo(() => {
-    return selectedInstituteId ? mockDepartments.filter(d => d.instituteId === selectedInstituteId) : [];
-  }, [selectedInstituteId]);
-
-  const hodsForInstitute = useMemo(() => {
-    return selectedInstituteId ? mockUsers.filter(u => u.role === UserRole.Dean && (u as Dean).instituteId === selectedInstituteId) as Dean[] : [];
-  }, [selectedInstituteId]);
+  const departmentsForInstitute = useMemo(() => [], [selectedInstituteId]);
+  const hodsForInstitute = useMemo(() => [], [selectedInstituteId]);
 
   const isLoginFormVisible =
     activeRole === UserRole.Student ||
@@ -86,8 +127,8 @@ const LoginPage: React.FC = () => {
         value={selectedInstituteId}
         onChange={handleInstituteChange}
       >
-        <option value="">-- Choose an Institute --</option>
-        {mockInstitutes.map(inst => <option key={inst.id} value={inst.id}>{inst.name}</option>)}
+        <option value="">-- No institutes configured --</option>
+        {/* Institutes are configured by the backend/admin UI. Left empty intentionally until services are available. */}
       </Select>
 
       {selectedInstituteId && (
@@ -119,8 +160,9 @@ const LoginPage: React.FC = () => {
           value={selectedHodId}
           onChange={(e) => setSelectedHodId(e.target.value)}
         >
-          <option value="">-- Choose your HOD --</option>
-          {hodsForInstitute.map(hod => <option key={hod.id} value={hod.id}>{hod.name} ({hod.department})</option>)}
+          <option value="">-- No HODs configured --</option>
+          {/* Institutes, departments and HOD lists are configured via admin in a backed environment.
+            They are intentionally empty now so your app uses real data later. */}
         </Select>
       )}
     </div>
@@ -155,10 +197,21 @@ const LoginPage: React.FC = () => {
             ))}
           </div>
 
-          {activeRole === UserRole.Teacher && teacherFlow}
-          
-          {isLoginFormVisible && (
-            <form className="space-y-6" onSubmit={handleLogin}>
+          {!showSignUp ? (
+            <>
+              {activeRole === UserRole.Teacher && teacherFlow}
+              
+              {isLoginFormVisible && (
+                <form className="space-y-6" onSubmit={handleLogin}>
+              { (activeRole === UserRole.Teacher || activeRole === UserRole.Student || activeRole === UserRole.Parent) && (
+                <Input
+                  id="institute"
+                  label="Institute Name"
+                  type="text"
+                  value={instituteName}
+                  onChange={(e) => setInstituteName(e.target.value)}
+                />
+              )}
               <Input
                 id="email"
                 label="Email address"
@@ -194,23 +247,79 @@ const LoginPage: React.FC = () => {
                 <Button type="submit" className="w-full">
                   Sign in as {ROLES.find(r => r.id === activeRole)?.name}
                 </Button>
+                </div>
+              </form>
+              )}
+            </>
+          ) : (
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-bold">Create a new {ROLES.find(r => r.id === activeRole)?.name} account</h3>
+                <Button type="button" variant="secondary" onClick={() => setShowSignUp(false)}>Sign-in</Button>
               </div>
-            </form>
+              <form className="space-y-4" onSubmit={handleSignUpSubmit}>
+                <Input id="signup-name" label="Full name" value={signName} onChange={e => setSignName(e.target.value)} required />
+                {(activeRole === UserRole.Teacher || activeRole === UserRole.Student || activeRole === UserRole.Parent) && (
+                  <Input id="signup-institute" label="Institute Name" value={instituteName} onChange={e => setInstituteName(e.target.value)} />
+                )}
+                <Input id="signup-email" label="Email" type="email" value={signEmail} onChange={e => setSignEmail(e.target.value)} required />
+                <Input id="signup-password" label="Password" type="password" value={signPassword} onChange={e => setSignPassword(e.target.value)} required />
+                {activeRole === UserRole.Teacher && (
+                  <div className="space-y-3">
+                    <label className="block text-sm font-medium">Teacher Title</label>
+                    <select className="w-full bg-[rgb(var(--foreground-color))] border border-[rgb(var(--border-color))] rounded-md p-2" value={teacherTitle} onChange={e => setTeacherTitle(e.target.value)}>
+                      {['subject-teacher','class-teacher','hod','vice-principal','principal','director','chairman'].map(t => (
+                        <option key={t} value={t}>{t.replace(/-/g,' ').replace(/\b\w/g, c => c.toUpperCase())}</option>
+                      ))}
+                    </select>
+
+                    <div>
+                      <label className="block text-sm font-medium">Subjects (add multiple)</label>
+                      <div className="flex gap-2 mt-2">
+                        <Input id="new-subject" label="New subject" value={newSubject} onChange={e => setNewSubject(e.target.value)} />
+                        <Button type="button" onClick={() => {
+                          if (newSubject.trim()) { setSignSubjects(prev => [...prev, newSubject.trim()]); setNewSubject(''); }
+                        }}>Add</Button>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {signSubjects.map(s => (
+                          <div key={s} className="px-2 py-1 bg-[rgb(var(--subtle-background-color))] rounded-full flex items-center gap-2">
+                            <span className="text-sm">{s}</span>
+                            <button type="button" onClick={() => setSignSubjects(prev => prev.filter(x => x !== s))} className="text-xs font-bold text-red-500">×</button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {teacherTitle === 'class-teacher' && (
+                      <Input id="signup-class" label="Class ID (for class teacher)" value={signClassId} onChange={e => setSignClassId(e.target.value)} />
+                    )}
+                  </div>
+                )}
+                {signError && <p className="text-sm text-red-500">{signError}</p>}
+                <div className="flex gap-2 justify-end">
+                  <Button type="button" variant="secondary" onClick={() => setShowSignUp(false)}>Cancel</Button>
+                  <Button type="submit">Create account</Button>
+                </div>
+              </form>
+            </div>
           )}
 
           <div className="text-center mt-6">
             <p className="text-sm text-[rgb(var(--text-secondary-color))]">
               Don't have an account?{' '}
               <button 
-                onClick={handleSignUp} 
+                onClick={handleSignUpClick} 
                 className="font-medium text-[rgb(var(--primary-color))] hover:text-[rgb(var(--primary-color-dark))] focus:outline-none bg-transparent border-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                disabled={activeRole === UserRole.Teacher && !isLoginFormVisible}
+                // Sign-up is allowed for all roles (including Teacher). Role-specific
+                // details can be collected in the sign-up form instead of blocking.
               >
                 Sign up
               </button>
             </p>
           </div>
         </Card>
+        {/* Sign-up form is now rendered inside the main Card so sign-in/sign-up do not show together */}
       </div>
     </div>
   );

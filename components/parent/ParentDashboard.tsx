@@ -5,7 +5,7 @@ import Card from '../ui/Card';
 import AttendanceBarChart from '../charts/AttendanceBarChart';
 import SubjectPieChart from '../charts/SubjectPieChart';
 import { useAuth } from '../../hooks/useAuth';
-import { mockUsers, mockMarks, mockAttendance, mockAnnouncements } from '../../data/mock';
+import { useData } from '../../context/DataContext';
 import { Parent, Student, Mark, AttendanceRecord } from '../../types';
 import { ATTENDANCE_THRESHOLD } from '../../constants';
 
@@ -37,8 +37,9 @@ const ChildSwitcher: React.FC<{
 };
 
 const ParentDashboardContent: React.FC<{ child: Student }> = ({ child }) => {
-    const childMarks = useMemo(() => mockMarks.filter(m => m.studentId === child.id), [child.id]);
-    const childAttendance = useMemo(() => mockAttendance.filter(a => a.studentId === child.id), [child.id]);
+    const { marks: allMarks, attendance: allAttendance, messages } = useData();
+    const childMarks = useMemo(() => allMarks.filter(m => m.studentId === child.id), [allMarks, child.id]);
+    const childAttendance = useMemo(() => allAttendance.filter(a => a.studentId === child.id), [allAttendance, child.id]);
 
     const attendanceData = useMemo(() => {
         const total = childAttendance.length;
@@ -69,11 +70,15 @@ const ParentDashboardContent: React.FC<{ child: Student }> = ({ child }) => {
                     <h3 className="font-bold text-lg mb-2">Announcements</h3>
                     <div className="h-24 overflow-y-auto">
                         <ul className="space-y-2">
-                        {mockAnnouncements.map(ann => (
-                            <li key={ann.id} className="text-sm p-2 rounded bg-[rgba(var(--primary-color),0.1)]">
-                                <strong>{ann.teacherName}:</strong> {ann.content}
-                            </li>
-                        ))}
+                                                {messages.length ? (
+                                                    messages.map(msg => (
+                                                        <li key={msg.id} className="text-sm p-2 rounded bg-[rgba(var(--primary-color),0.1)]">
+                                                                <strong>{msg.senderName || msg.senderId}:</strong> {msg.content}
+                                                        </li>
+                                                    ))
+                                                ) : (
+                                                    <li className="text-sm p-2">No announcements available.</li>
+                                                )}
                         </ul>
                     </div>
                 </Card>
@@ -101,10 +106,8 @@ const ParentDashboard: React.FC = () => {
   const { user } = useAuth();
   const parentUser = user as Parent;
   
-  const childrenData = useMemo(() => 
-    mockUsers.filter(u => parentUser.childIds.includes(u.id)) as Student[],
-    [parentUser.childIds]
-  );
+    const { users } = useData();
+    const childrenData = useMemo(() => users.filter(u => parentUser.childIds.includes(u.id)) as Student[], [users, parentUser.childIds]);
   
   const [selectedChildId, setSelectedChildId] = useState(childrenData[0]?.id || '');
   
@@ -112,9 +115,11 @@ const ParentDashboard: React.FC = () => {
 
   // Parent dashboard is simpler, so we can use a static nav item and just change content
   const [activeItem, setActiveItem] = useState('Dashboard');
-  const navItems = [
-    { name: 'Dashboard', icon: <Icon path="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m-7.512 2.72a3 3 0 01-4.682-2.72 9.094 9.094 0 013.741-.479m-4.26 9.574a4.5 4.5 0 01-.223-1.99a4.5 4.5 0 01.223-1.99m13.486 0a4.5 4.5 0 00-.223-1.99a4.5 4.5 0 00.223-1.99m-13.486 0a4.5 4.5 0 00.223 1.99" /> },
-  ];
+    const navItems = [
+        // Use a neutral placeholder for parent dashboard so the sidebar button looks clean
+        // (no wired / decorative symbol). UI will rely on the text label.
+        { name: 'Dashboard', icon: <span className="w-6 h-6 inline-block" /> },
+    ];
 
   return (
     <Layout navItems={navItems} activeItem={activeItem} setActiveItem={setActiveItem}>

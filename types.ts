@@ -21,6 +21,7 @@ export interface User {
   id: string;
   name: string;
   email: string;
+  avatarUrl?: string; // optional profile image URL (Data URL in dev)
   role: UserRole;
 }
 
@@ -35,6 +36,26 @@ export interface Teacher extends User {
   department: string;
   instituteId: string;
   reportingToId: string; // HOD's ID
+}
+
+// More granular titles/ranks for teachers/leadership roles in the institute
+export enum TeacherTitle {
+  SubjectTeacher = 'subject-teacher',
+  ClassTeacher = 'class-teacher',
+  HOD = 'hod',
+  VicePrincipal = 'vice-principal',
+  Principal = 'principal',
+  Director = 'director',
+  Chairman = 'chairman'
+}
+
+export interface TeacherExtended extends Teacher {
+  // human readable/functional title inside the institute
+  title?: TeacherTitle;
+  // subjects this teacher handles
+  subjects?: string[];
+  // class assigned when this teacher is a class-teacher
+  classId?: string;
 }
 
 export interface Dean extends User { // Represents HOD

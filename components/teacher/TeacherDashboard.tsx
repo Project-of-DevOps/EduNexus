@@ -2,7 +2,8 @@ import React, { useState, useMemo } from 'react';
 import Layout from '../Layout';
 import { useAuth } from '../../hooks/useAuth';
 import { useData } from '../../context/DataContext';
-import { UserRole, Class, Student as StudentType, Task, StudentTask } from '../../types';
+import { UserRole, Class, Student as StudentType, Task, StudentTask, TeacherExtended } from '../../types';
+import { TEACHER_TITLES, TEACHER_TITLE_RANK } from '../../constants';
 import Card from '../ui/Card';
 import Button from '../ui/Button';
 import Select from '../ui/Select';
@@ -228,14 +229,34 @@ const MarksManager: React.FC<{ classId: string, onBack: () => void }> = ({ class
         <Button onClick={onBack} variant="secondary" className="mt-4">Back to Class</Button>
     </Card>
 );
-const DocumentUploader: React.FC = () => (
-    <Card>
-        <h3 className="text-xl font-bold mb-4">Upload General Document (PDF)</h3>
-        <div className="border-2 border-dashed border-[rgb(var(--border-color))] rounded-lg p-8 text-center text-[rgb(var(--text-secondary-color))]">
-            <p>Drag & Drop your PDF here</p>
-        </div>
-    </Card>
-);
+const DocumentUploader: React.FC = () => {
+    const [files, setFiles] = useState<File[]>([]);
+    const inputRef = React.useRef<HTMLInputElement | null>(null);
+
+    const onPick = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const picked = e.target.files ? Array.from(e.target.files) : [];
+        if (picked.length) setFiles(prev => [...prev, ...picked]);
+    };
+
+    return (
+        <Card>
+            <h3 className="text-xl font-bold mb-4">Upload General Document (PDF)</h3>
+            <div className="border-2 border-dashed border-[rgb(var(--border-color))] rounded-lg p-8 text-center text-[rgb(var(--text-secondary-color))] cursor-pointer" onClick={() => inputRef.current?.click()}>
+                <input ref={inputRef} type="file" accept="application/pdf" className="hidden" onChange={onPick} />
+                <p>Drag & Drop your PDF here — or click to select</p>
+            </div>
+            <div className="mt-3 flex items-center justify-between">
+                <div className="flex flex-wrap gap-2">
+                    {files.map((f, i) => <div key={i} className="px-2 py-1 bg-[rgb(var(--subtle-background-color))] rounded">{f.name}</div>)}
+                    {files.length === 0 && <div className="text-sm text-[rgb(var(--text-secondary-color))]">No files selected</div>}
+                </div>
+                <div className="flex gap-2">
+                    <button type="button" className="px-3 py-1 rounded border" onClick={() => inputRef.current?.click()}>Add more</button>
+                </div>
+            </div>
+        </Card>
+    );
+};
 const ModelPaperUploader: React.FC = () => (
     <Card>
         <h3 className="text-xl font-bold mb-4">Upload Model Paper</h3>
@@ -249,15 +270,39 @@ const ModelPaperUploader: React.FC = () => (
     </Card>
 );
 const DepartmentManager: React.FC = () => {
-    const { teachers, deleteUser } = useData();
+    const { teachers, deleteUser, setUserTitle, updateTeacherSubjects } = useData();
+    const { user } = useAuth();
+    const currentTitle = (user as any)?.title || '';
     return (
         <Card>
             <h3 className="text-xl font-bold mb-4">Manage Department Teachers</h3>
             <ul className="space-y-2">
                 {teachers.map(t => (
-                    <li key={t.id} className="flex justify-between items-center p-2 bg-[rgb(var(--subtle-background-color))] rounded">
-                        <span>{t.name} - {t.department}</span>
-                        <Button onClick={() => deleteUser(t.id)} variant="danger" size="sm">Delete</Button>
+                    <li key={t.id} className="flex flex-col md:flex-row justify-between items-start md:items-center p-2 bg-[rgb(var(--subtle-background-color))] rounded">
+                        <div className="flex items-center gap-4 w-full md:w-auto">
+                            <span className="font-semibold">{t.name}</span>
+                            <span className="text-sm text-[rgb(var(--text-secondary-color))]">- {t.department}</span>
+                        </div>
+                        <div className="flex items-center gap-2 mt-2 md:mt-0">
+                            <label className="text-sm mr-2">Title</label>
+                                                        {(() => {
+                                                                const currentRank = TEACHER_TITLE_RANK[currentTitle] || 0;
+                                                                const targetRank = TEACHER_TITLE_RANK[(t as any).title || 'subject-teacher'] || 0;
+                                                                const canEdit = currentRank > targetRank;
+                                                                return (
+                                                                    <select value={(t as any).title || 'subject-teacher'} onChange={(e) => canEdit && setUserTitle(t.id, e.target.value)} disabled={!canEdit} className="p-1 border rounded">
+                                                                        {TEACHER_TITLES.map(tt => (
+                                                                                <option key={tt.id} value={tt.id}>{tt.name}</option>
+                                                                        ))}
+                                                                    </select>
+                                                                );
+                                                        })()}
+                            
+                            <Button onClick={() => deleteUser(t.id)} variant="danger" size="sm">Delete</Button>
+                        </div>
+                        { (t as any).subjects && (t as any).subjects.length > 0 && (
+                            <div className="w-full mt-2 md:mt-0 md:w-auto text-sm text-[rgb(var(--text-secondary-color))]">Subjects: {(t as any).subjects.join(', ')}</div>
+                        )}
                     </li>
                 ))}
             </ul>
@@ -324,8 +369,12 @@ const TeacherDashboard: React.FC = () => {
   const [currentView, setCurrentView] = useState('dashboard'); // dashboard, class, attendance, marks
   const [showMessages, setShowMessages] = useState(false);
   
-  const { user } = useAuth();
-  const { classes } = useData();
+    const { user } = useAuth();
+    const { classes, users, updateTeacherSubjects } = useData();
+
+    const me = users.find(u => u.id === user?.id) as (TeacherExtended | undefined);
+    const mySubjects = me?.subjects || [];
+    const [manageNewSubject, setManageNewSubject] = useState('');
   
   const teacherClasses = useMemo(() => 
     classes.filter(c => c.teacherIds.includes(user!.id)),
@@ -382,7 +431,34 @@ const TeacherDashboard: React.FC = () => {
             // Default Dashboard View
             return (
               <div className="space-y-6">
-                <h2 className="text-3xl font-bold">Your Classes</h2>
+                        <h2 className="text-3xl font-bold">Your Classes</h2>
+                        {user?.role === UserRole.Teacher && (
+                            <Card className="mt-4">
+                                <div className="flex justify-between items-center mb-3">
+                                    <h3 className="font-bold">My Subjects</h3>
+                                    <p className="text-sm text-[rgb(var(--text-secondary-color))]">Manage the subjects you handle</p>
+                                </div>
+                                <div className="space-y-3">
+                                    <div className="flex gap-2">
+                                        <Input id="manage-subject" label="Add subject" value={manageNewSubject} onChange={e => setManageNewSubject(e.target.value)} />
+                                        <Button onClick={() => {
+                                            if (manageNewSubject.trim()) {
+                                                updateTeacherSubjects(user!.id, [...mySubjects, manageNewSubject.trim()]);
+                                                setManageNewSubject('');
+                                            }
+                                        }}>Add</Button>
+                                    </div>
+                                    <div className="flex flex-wrap gap-2">
+                                        {mySubjects.length ? mySubjects.map(s => (
+                                            <div key={s} className="px-2 py-1 bg-[rgb(var(--subtle-background-color))] rounded-full flex items-center gap-2">
+                                                <span className="text-sm">{s}</span>
+                                                <button type="button" onClick={() => updateTeacherSubjects(user!.id, mySubjects.filter(x => x !== s))} className="text-xs font-bold text-red-500">×</button>
+                                            </div>
+                                        )) : <div className="text-sm text-[rgb(var(--text-secondary-color))]">No subjects assigned yet.</div>}
+                                    </div>
+                                </div>
+                            </Card>
+                        )}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                   {teacherClasses.map(c => (
                     <Card key={c.id} className="hover:shadow-lg transition-shadow">
