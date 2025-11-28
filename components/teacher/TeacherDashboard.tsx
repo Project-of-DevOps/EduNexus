@@ -8,6 +8,7 @@ import Card from '../ui/Card';
 import Button from '../ui/Button';
 import Select from '../ui/Select';
 import MessagesView from '../shared/MessagesView';
+import ProfileView from '../shared/ProfileView';
 import Modal from '../ui/Modal';
 import Input from '../ui/Input';
 
@@ -400,7 +401,8 @@ const TeacherDashboard: React.FC = () => {
     { name: 'Dashboard', icon: <Icon path="M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1.5-1.5m1.5 1.5l1.5-1.5m0 0l1.5 1.5m-1.5-1.5l-1.5 1.5" /> },
     { name: 'Upload PDF', icon: <Icon path="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" /> },
     { name: 'Upload Model Paper', icon: <Icon path="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" /> },
-    { name: 'Announcements', icon: <Icon path="M10.34 15.84c-.688-.06-1.386-.09-2.09-.09H7.5a4.5 4.5 0 01-4.5-4.5V7.5a4.5 4.5 0 014.5-4.5h7.5a4.5 4.5 0 014.5 4.5v3.84" /> }
+    { name: 'Announcements', icon: <Icon path="M10.34 15.84c-.688-.06-1.386-.09-2.09-.09H7.5a4.5 4.5 0 01-4.5-4.5V7.5a4.5 4.5 0 014.5-4.5h7.5a4.5 4.5 0 014.5 4.5v3.84" /> },
+    { name: 'Profile', icon: <Icon path="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.5 19.5a8.25 8.25 0 0115 0" /> }
   ];
   
   if (user?.role === UserRole.Dean) {
@@ -480,13 +482,15 @@ const TeacherDashboard: React.FC = () => {
             return <ModelPaperUploader />;
         case 'Announcements':
             return <div>Announcements Coming Soon</div>;
+        case 'Profile':
+            return <ProfileView />;
         default:
             return <div>Select an item from the sidebar</div>;
     }
   };
 
   return (
-    <Layout navItems={navItems} activeItem={activeItem} setActiveItem={setActiveItem} setShowMessages={setShowMessages}>
+    <Layout navItems={navItems} activeItem={activeItem} setActiveItem={setActiveItem} setShowMessages={setShowMessages} profileNavItemName="Profile">
         <div className="mb-4">
             <nav className="flex" aria-label="Breadcrumb">
                 <ol className="inline-flex items-center space-x-1 md:space-x-3">

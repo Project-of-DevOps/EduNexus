@@ -10,6 +10,8 @@ interface LayoutProps {
   activeItem: string;
   setActiveItem: (item: string) => void;
   setShowMessages?: (show: boolean) => void;
+  profileNavItemName?: string;
+  onAvatarClick?: () => void;
 }
 
 const Icon = ({ path, className }: { path: string, className?: string }) => (
@@ -18,11 +20,29 @@ const Icon = ({ path, className }: { path: string, className?: string }) => (
     </svg>
 );
 
-const Layout: React.FC<LayoutProps> = ({ children, navItems, activeItem, setActiveItem, setShowMessages }) => {
-  const { user, logout, updateProfile } = useAuth();
+const Layout: React.FC<LayoutProps> = ({
+  children,
+  navItems,
+  activeItem,
+  setActiveItem,
+  setShowMessages,
+  profileNavItemName = 'Profile',
+  onAvatarClick,
+}) => {
+  const { user, logout } = useAuth();
   const { messages } = useData();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  const handleAvatarClick = () => {
+    if (onAvatarClick) {
+      onAvatarClick();
+      return;
+    }
+    if (profileNavItemName) {
+      setActiveItem(profileNavItemName);
+    }
+  };
 
   const handleLogout = () => {
     logout();
@@ -102,37 +122,15 @@ const Layout: React.FC<LayoutProps> = ({ children, navItems, activeItem, setActi
                   <p className="font-semibold">{user?.name}</p>
                   <p className="text-sm text-[rgb(var(--text-secondary-color))]">{roleName}</p>
               </div>
-              <div className="relative">
-                {/* Hidden file input for avatar change */}
-                <input id="avatar-input" type="file" accept="image/*" className="hidden" onChange={async (e) => {
-                  const file = e.target.files?.[0];
-                  if (!file) return;
-                  const reader = new FileReader();
-                  reader.onload = () => {
-                    const dataUrl = reader.result as string;
-                    // update profile in auth context so both auth state and DataContext persist
-                    try {
-                      // use updateProfile from auth
-                      // eslint-disable-next-line @typescript-eslint/no-use-before-define
-                      updateProfile({ avatarUrl: dataUrl });
-                    } catch (err) {
-                      console.warn('Failed to update avatar', err);
-                    }
-                  };
-                  reader.readAsDataURL(file);
-                }} />
-
-                {/* Avatar display (click to change) */}
-                <label htmlFor="avatar-input" className="cursor-pointer inline-block">
-                  {user?.avatarUrl ? (
-                    <img className="w-10 h-10 rounded-full object-cover" src={user.avatarUrl} alt="User Avatar" />
-                  ) : (
-                    <div className="w-10 h-10 rounded-full bg-[rgb(var(--subtle-background-color))] flex items-center justify-center text-sm font-semibold text-[rgb(var(--text-color))]">
-                      {user?.name?.split(' ').map(s => s[0]).slice(0,2).join('').toUpperCase() || 'U'}
-                    </div>
-                  )}
-                </label>
-              </div>
+              <button type="button" onClick={handleAvatarClick} className="relative inline-block cursor-pointer focus:outline-none focus:ring-2 focus:ring-[rgb(var(--primary-color))] rounded-full" aria-label="Open profile">
+                {user?.avatarUrl ? (
+                  <img className="w-10 h-10 rounded-full object-cover" src={user.avatarUrl} alt="User Avatar" />
+                ) : (
+                  <div className="w-10 h-10 rounded-full bg-[rgb(var(--subtle-background-color))] flex items-center justify-center text-sm font-semibold text-[rgb(var(--text-color))]">
+                    {user?.name?.split(' ').map(s => s[0]).slice(0,2).join('').toUpperCase() || 'U'}
+                  </div>
+                )}
+              </button>
           </div>
         </header>
         <main className="flex-1 overflow-x-hidden overflow-y-auto bg-[rgb(var(--background-color))] p-6">

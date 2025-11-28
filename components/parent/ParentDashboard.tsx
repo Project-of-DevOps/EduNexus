@@ -1,13 +1,15 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import Layout from '../Layout';
 import Card from '../ui/Card';
 import AttendanceBarChart from '../charts/AttendanceBarChart';
 import SubjectPieChart from '../charts/SubjectPieChart';
+import Button from '../ui/Button';
 import { useAuth } from '../../hooks/useAuth';
 import { useData } from '../../context/DataContext';
-import { Parent, Student, Mark, AttendanceRecord } from '../../types';
+import { Parent, Student, Mark, AttendanceRecord, UserRole } from '../../types';
 import { ATTENDANCE_THRESHOLD } from '../../constants';
+import ProfileView from '../shared/ProfileView';
 
 
 const ChildSwitcher: React.FC<{
@@ -108,33 +110,96 @@ const ParentDashboard: React.FC = () => {
   
     const { users } = useData();
     const childrenData = useMemo(() => users.filter(u => parentUser.childIds.includes(u.id)) as Student[], [users, parentUser.childIds]);
+    const parentAccounts = useMemo(() => users.filter(u => u.role === UserRole.Parent) as Parent[], [users]);
   
   const [selectedChildId, setSelectedChildId] = useState(childrenData[0]?.id || '');
+  const [selectedParentAccountId, setSelectedParentAccountId] = useState(parentUser.id);
+  const [switchFeedback, setSwitchFeedback] = useState('');
+  
+  useEffect(() => {
+    setSelectedParentAccountId(parentUser.id);
+  }, [parentUser.id]);
+  
+  const handleSwitchAccount = () => {
+    if (selectedParentAccountId === parentUser.id) {
+        setSwitchFeedback('You are already using this account.');
+        return;
+    }
+    const target = parentAccounts.find(acc => acc.id === selectedParentAccountId);
+    if (target) {
+        setSwitchFeedback(`Switch to ${target.name} by signing in with their Unique ID when prompted.`);
+    } else {
+        setSwitchFeedback('Selected account is no longer available.');
+    }
+  };
   
   const selectedChild = childrenData.find(c => c.id === selectedChildId);
 
   // Parent dashboard is simpler, so we can use a static nav item and just change content
   const [activeItem, setActiveItem] = useState('Dashboard');
     const navItems = [
-        // Use a neutral placeholder for parent dashboard so the sidebar button looks clean
-        // (no wired / decorative symbol). UI will rely on the text label.
         { name: 'Dashboard', icon: <span className="w-6 h-6 inline-block" /> },
+        { name: 'Profile', icon: <span className="w-6 h-6 inline-block" /> },
     ];
 
+    const renderContent = () => {
+        if (activeItem === 'Profile') {
+            return <ProfileView />;
+        }
+
+        return (
+            <>
+                <Card className="mb-6">
+                    <div className="space-y-3">
+                        <div>
+                            <h3 className="font-bold text-lg">Switch Account</h3>
+                            <p className="text-sm text-[rgb(var(--text-secondary-color))]">
+                                Manage multiple parent accounts and jump between them without losing context.
+                            </p>
+                        </div>
+                        <div className="flex flex-col sm:flex-row gap-3">
+                            <select
+                                value={selectedParentAccountId}
+                                onChange={(e) => setSelectedParentAccountId(e.target.value)}
+                                className="flex-1 bg-[rgb(var(--foreground-color))] border border-[rgb(var(--border-color))] rounded-md py-2 px-3 focus:outline-none focus:ring-1 focus:ring-[rgb(var(--primary-color))]"
+                            >
+                                {parentAccounts.map(account => (
+                                    <option key={account.id} value={account.id}>
+                                        {account.name}
+                                    </option>
+                                ))}
+                            </select>
+                            <Button type="button" onClick={handleSwitchAccount} className="sm:w-auto w-full">
+                                Switch Account
+                            </Button>
+                        </div>
+                        <p className="text-xs text-[rgb(var(--text-secondary-color))]">
+                            Switching will require authentication with the selected account's Unique ID for security.
+                        </p>
+                        {switchFeedback && (
+                            <p className="text-sm text-[rgb(var(--primary-color))]">{switchFeedback}</p>
+                        )}
+                    </div>
+                </Card>
+                {childrenData.length > 1 && (
+                    <ChildSwitcher 
+                        childrenData={childrenData} 
+                        selectedChildId={selectedChildId} 
+                        setSelectedChildId={setSelectedChildId} 
+                    />
+                )}
+                {selectedChild ? (
+                    <ParentDashboardContent child={selectedChild} />
+                ) : (
+                    <Card><p>No child selected or data not found.</p></Card>
+                )}
+            </>
+        );
+    };
+
   return (
-    <Layout navItems={navItems} activeItem={activeItem} setActiveItem={setActiveItem}>
-      {childrenData.length > 1 && (
-        <ChildSwitcher 
-            childrenData={childrenData} 
-            selectedChildId={selectedChildId} 
-            setSelectedChildId={setSelectedChildId} 
-        />
-      )}
-      {selectedChild ? (
-          <ParentDashboardContent child={selectedChild} />
-      ) : (
-          <Card><p>No child selected or data not found.</p></Card>
-      )}
+    <Layout navItems={navItems} activeItem={activeItem} setActiveItem={setActiveItem} profileNavItemName="Profile">
+      {renderContent()}
     </Layout>
   );
 };

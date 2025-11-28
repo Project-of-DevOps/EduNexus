@@ -3,7 +3,9 @@ export enum UserRole {
   Teacher = 'teacher',
   Student = 'student',
   Parent = 'parent',
-  Dean = 'dean'
+
+  Dean = 'dean',
+  Management = 'management'
 }
 
 export interface Institute {
@@ -40,20 +42,34 @@ export interface Teacher extends User {
 
 // More granular titles/ranks for teachers/leadership roles in the institute
 export enum TeacherTitle {
-  SubjectTeacher = 'subject-teacher',
-  ClassTeacher = 'class-teacher',
-  HOD = 'hod',
-  VicePrincipal = 'vice-principal',
-  Principal = 'principal',
-  Director = 'director',
-  Chairman = 'chairman'
+  SubjectTeacher = 'Subject Teacher',
+  ClassTeacher = 'Class Teacher',
+  ClassTeacherAdvisor = 'Class Teacher (Advisor)',
+  HOD = 'HOD',
+  VicePrincipal = 'Vice Principal',
+  Principal = 'Principal',
+  Director = 'Director',
+  Chairman = 'Chairman',
+  Dean = 'Dean',
+  Professor = 'Professor',
+  AssociateProfessor = 'Associate Professor',
+  AssistantProfessor = 'Assistant Professor',
+  Lecturer = 'Lecturer',
+  SeniorTeacher = 'Senior Teacher'
+}
+
+export interface TeachingAssignment {
+  subject: string;
+  classId: string;
 }
 
 export interface TeacherExtended extends Teacher {
   // human readable/functional title inside the institute
   title?: TeacherTitle;
-  // subjects this teacher handles
+  // subjects this teacher handles (legacy simple list)
   subjects?: string[];
+  // detailed teaching assignments (subject + class pairing)
+  teachingAssignments?: TeachingAssignment[];
   // class assigned when this teacher is a class-teacher
   classId?: string;
 }
@@ -69,7 +85,12 @@ export interface Parent extends User {
   childIds: string[];
 }
 
-export type LoggedInUser = Student | Teacher | Parent | Dean;
+export interface Management extends User {
+  role: UserRole.Management;
+  instituteId: string;
+}
+
+export type LoggedInUser = Student | Teacher | Parent | Dean | Management;
 
 export interface Class {
   id: string;

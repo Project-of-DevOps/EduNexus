@@ -1,0 +1,92 @@
+EduNexus AI – Dummy Login Reference
+-----------------------------------
+Use these sample credentials purely for testing user flows locally.
+
+1) Subject Teacher
+   Name: Anika Mehta
+   Role: teacher (Subject Teacher)
+   Email: anika.subject@edunexus.local
+   Password: subject123
+   Unique ID: TEACH-SUB-001
+   Department: Computer Science
+   Institute ID: INST-001
+   Reporting To ID (HOD): HOD-001
+   Subjects: Data Structures, Algorithms
+
+2) Class Teacher
+   Name: Rohan Iyer
+   Role: teacher (Class Teacher)
+   Email: rohan.class@edunexus.local
+   Password: class123
+   Unique ID: TEACH-CLASS-001
+   Department: Computer Science
+   Institute ID: INST-001
+   Reporting To ID (HOD): HOD-001
+   Class ID: CS-2A
+
+3) Head of Department (HOD)
+   Name: Dr. Kavya Singh
+   Role: teacher (HOD)
+   Email: kavya.hod@edunexus.local
+   Password: hod123
+   Unique ID: HOD-001
+   Department: Computer Science
+   Institute ID: INST-001
+   Reporting To ID (Vice Principal): VP-001
+
+4) Vice Principal
+   Name: Prof. Arjun Verma
+   Role: teacher (Vice Principal)
+   Email: arjun.vp@edunexus.local
+   Password: vp123
+   Unique ID: VP-001
+   Institute ID: INST-001
+   Reporting To ID (Principal): PRINC-001
+
+5) Principal
+   Name: Dr. Saloni Rao
+   Role: teacher (Principal)
+   Email: saloni.principal@edunexus.local
+   Password: principal123
+   Unique ID: PRINC-001
+   Institute ID: INST-001
+   Reporting To ID (Director): DIR-001
+
+6) Director
+   Name: Mr. Manish Kapoor
+   Role: teacher (Director)
+   Email: manish.director@edunexus.local
+   Password: director123
+   Unique ID: DIR-001
+   Institute ID: INST-001
+   Reporting To ID (Chairman): CHAIR-001
+
+7) Chairman
+   Name: Mrs. Neeta Khanna
+   Role: teacher (Chairman)
+   Email: neeta.chair@edunexus.local
+   Password: chair123
+   Unique ID: CHAIR-001
+   Institute ID: INST-001
+
+8) Student
+   Name: Priya Nair
+   Role: student
+   Email: priya.student@edunexus.local
+   Password: student123
+   Unique ID: STUD-001
+   Parent ID: PARENT-001
+   Class ID: CS-2A
+
+9) Parent (for reference with the student above)
+   Name: Sunil Nair
+   Role: parent
+   Email: sunil.parent@edunexus.local
+   Password: parent123
+   Unique ID: PARENT-001
+   Child IDs: STUD-001
+
+Notes:
+- Use these entries to manually create accounts via the UI or to seed backend data later.
+- Keep the file outside the application’s runtime data so it is only for documentation/reference.
+

@@ -1,7 +1,7 @@
 
 import React, { createContext, useState, useContext, ReactNode, useMemo, useEffect } from 'react';
 // FIX: Import Mark and AttendanceRecord types to use in the context.
-import { LoggedInUser, Class, Message, Teacher, Student, Parent, Dean, UserRole, Task, StudentTask, Mark, AttendanceRecord } from '../types';
+import { LoggedInUser, Class, Message, Teacher, Student, Parent, Dean, UserRole, Task, StudentTask, Mark, AttendanceRecord, Department, TeacherTitle, TeacherExtended } from '../types';
 
 // NOTE: This DataContext no longer initializes from a large mock dataset.
 // It intentionally starts empty so the app acts like a real application where
@@ -19,8 +19,15 @@ interface DataContextType {
   students: Student[];
   parents: Parent[];
   // FIX: Add marks and attendance to the DataContextType interface.
+  departments: Department[];
   marks: Mark[];
   attendance: AttendanceRecord[];
+  addDepartment: (dept: Omit<Department, 'id'>) => void;
+  deleteDepartment: (id: string) => void;
+  addClass: (cls: Omit<Class, 'id'>) => void;
+  deleteClass: (id: string) => void;
+  assignHOD: (teacherId: string, departmentId: string) => void;
+  assignClassTeacher: (teacherId: string, classId: string) => void;
   addMessage: (message: Omit<Message, 'id' | 'timestamp' | 'readBy'>) => void;
   updateMessage: (messageId: string, newContent: string) => void;
   deleteUser: (userId: string) => void;
@@ -52,6 +59,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           studentTasks: parsed.studentTasks || [],
           marks: parsed.marks || [],
           attendance: parsed.attendance || [],
+          departments: parsed.departments || [],
+
         };
       }
     } catch (err) {
@@ -70,6 +79,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   // Keep marks/attendance empty until real service is available
   const [marks, setMarks] = useState<Mark[]>(() => persisted?.marks || []);
   const [attendance, setAttendance] = useState<AttendanceRecord[]>(() => persisted?.attendance || []);
+  const [departments, setDepartments] = useState<Department[]>(() => persisted?.departments || []);
 
   // If no persisted users exist, seed the small `loginDummyUsers` so the UI has
   // one sample student, teacher and parent to work with out-of-the-box.
@@ -125,55 +135,107 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const updateMessage = (messageId: string, newContent: string) => {
-    setMessages(prev => prev.map(msg => 
-        msg.id === messageId ? { ...msg, content: newContent } : msg
+    setMessages(prev => prev.map(msg =>
+      msg.id === messageId ? { ...msg, content: newContent } : msg
     ));
   };
-  
+
   const deleteUser = (userId: string) => {
     setUsers(prev => prev.filter(user => user.id !== userId));
     // Also remove from classes, etc.
     setClasses(prev => prev.map(c => ({
-        ...c,
-        teacherIds: c.teacherIds.filter(id => id !== userId),
-        studentIds: c.studentIds.filter(id => id !== userId)
+      ...c,
+      teacherIds: c.teacherIds.filter(id => id !== userId),
+      studentIds: c.studentIds.filter(id => id !== userId)
     })));
     // Also remove any student tasks they have
     setStudentTasks(prev => prev.filter(st => st.studentId !== userId));
   };
-  
+
   const addTask = (taskData: Omit<Task, 'id'>, studentIds: string[]) => {
     const newTaskId = `task${Date.now()}`;
     const newTask: Task = {
-        id: newTaskId,
-        ...taskData,
+      id: newTaskId,
+      ...taskData,
     };
     setTasks(prev => [newTask, ...prev]);
 
     const newStudentTasks: StudentTask[] = studentIds.map(studentId => ({
-        id: `stask${Date.now()}${studentId.slice(-4)}`,
-        taskId: newTaskId,
-        studentId: studentId,
-        status: 'To Do',
+      id: `stask${Date.now()}${studentId.slice(-4)}`,
+      taskId: newTaskId,
+      studentId: studentId,
+      status: 'To Do',
     }));
     setStudentTasks(prev => [...prev, ...newStudentTasks]);
   };
-  
+
   const deleteTask = (taskId: string) => {
-      setTasks(prev => prev.filter(t => t.id !== taskId));
-      setStudentTasks(prev => prev.filter(st => st.taskId !== taskId));
+    setTasks(prev => prev.filter(t => t.id !== taskId));
+    setStudentTasks(prev => prev.filter(st => st.taskId !== taskId));
   };
 
   const updateStudentTaskStatus = (studentTaskId: string, status: StudentTask['status']) => {
     setStudentTasks(prev => prev.map(st => {
-        if (st.id === studentTaskId) {
-            return {
-                ...st,
-                status: status,
-                completedDate: status === 'Completed' ? new Date().toISOString() : st.completedDate, // Keep old date if toggled away from completed
-            };
-        }
-        return st;
+      if (st.id === studentTaskId) {
+        return {
+          ...st,
+          status: status,
+          completedDate: status === 'Completed' ? new Date().toISOString() : st.completedDate, // Keep old date if toggled away from completed
+        };
+      }
+      return st;
+    }));
+  };
+
+  const addDepartment = (dept: Omit<Department, 'id'>) => {
+    const newDept = { ...dept, id: `dept${Date.now()}` };
+    setDepartments(prev => [...prev, newDept]);
+  };
+
+  const deleteDepartment = (id: string) => {
+    setDepartments(prev => prev.filter(d => d.id !== id));
+  };
+
+  const addClass = (cls: Omit<Class, 'id'>) => {
+    const newClass = { ...cls, id: `class${Date.now()}` };
+    setClasses(prev => [...prev, newClass]);
+  };
+
+  const deleteClass = (id: string) => {
+    setClasses(prev => prev.filter(c => c.id !== id));
+  };
+
+  const assignHOD = (teacherId: string, departmentId: string) => {
+    setUsers(prev => prev.map(u => {
+      if (u.id === teacherId) {
+        return {
+          ...u,
+          role: UserRole.Teacher, // Ensure they remain a teacher role base
+          title: TeacherTitle.HOD,
+          department: departmentId
+        } as TeacherExtended;
+      }
+      return u;
+    }));
+  };
+
+  const assignClassTeacher = (teacherId: string, classId: string) => {
+    setUsers(prev => prev.map(u => {
+      if (u.id === teacherId) {
+        return {
+          ...u,
+          title: TeacherTitle.ClassTeacher,
+          classId: classId
+        } as TeacherExtended;
+      }
+      return u;
+    }));
+    // Also update the class to include this teacher
+    setClasses(prev => prev.map(c => {
+      if (c.id === classId && !c.teacherIds.includes(teacherId)) {
+        return { ...c, teacherIds: [...c.teacherIds, teacherId] };
+      }
+      return c;
     }));
   };
 
@@ -206,6 +268,13 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setUserTitle,
     updateUserAvatar,
     updateUser,
+    departments,
+    addDepartment,
+    deleteDepartment,
+    addClass,
+    deleteClass,
+    assignHOD,
+    assignClassTeacher,
   };
 
   return (
@@ -218,16 +287,16 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 // Persist changes in the background whenever key pieces of state change.
 // Keep persistence outside the provider so changes are reliably stored.
 export const DataPersistence: React.FC = () => {
-  const { users, classes, messages, tasks, studentTasks, marks, attendance } = React.useContext(DataContext) as DataContextType;
+  const { users, classes, messages, tasks, studentTasks, marks, attendance, departments } = React.useContext(DataContext) as DataContextType;
 
   useEffect(() => {
     try {
-      const toStore = JSON.stringify({ users, classes, messages, tasks, studentTasks, marks, attendance });
+      const toStore = JSON.stringify({ users, classes, messages, tasks, studentTasks, marks, attendance, departments });
       localStorage.setItem('edunexus:data', toStore);
     } catch (err) {
       console.warn('Failed to persist data', err);
     }
-  }, [users, classes, messages, tasks, studentTasks, marks, attendance]);
+  }, [users, classes, messages, tasks, studentTasks, marks, attendance, departments]);
 
   return null;
 };
