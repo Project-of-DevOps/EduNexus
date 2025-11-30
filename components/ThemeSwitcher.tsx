@@ -3,11 +3,11 @@ import React from 'react';
 import { useTheme } from '../context/ThemeContext';
 
 const themes = [
-    { id: 'light-white', name: 'Light' },
-    { id: 'light-pink', name: 'Light Pink' },
-    { id: 'light-green', name: 'Light Green' },
-    { id: 'light-brown', name: 'Light Brown' },
-    { id: 'black', name: 'Dark' },
+    { id: 'white', name: 'Light' },
+    { id: 'pink', name: 'Pink' },
+    { id: 'green', name: 'Green' },
+    { id: 'brown', name: 'Brown' },
+    { id: 'dark', name: 'Dark' },
 ];
 
 const ThemeSwitcher: React.FC = () => {

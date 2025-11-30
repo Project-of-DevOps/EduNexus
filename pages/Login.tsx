@@ -7,7 +7,7 @@ const LoginPage: React.FC = () => {
   const navigate = useNavigate();
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[rgb(var(--background-color))] px-4">
+    <div className="min-h-screen flex items-center justify-center bg-[rgb(var(--background-color))] px-4 text-gray-900">
       <div className="max-w-md w-full space-y-8">
         <div className="text-center">
           <h1 className="text-4xl font-extrabold text-[#1e3a8a]">
@@ -20,6 +20,13 @@ const LoginPage: React.FC = () => {
 
         <Card>
           <div className="space-y-4">
+            <Button
+              className="w-full py-4 text-lg"
+              variant="outline"
+              onClick={() => navigate('/login/management')}
+            >
+              Management
+            </Button>
             <Button
               className="w-full py-4 text-lg"
               variant="outline"
@@ -40,13 +47,6 @@ const LoginPage: React.FC = () => {
               onClick={() => navigate('/login/parent')}
             >
               Parent
-            </Button>
-            <Button
-              className="w-full py-4 text-lg"
-              variant="outline"
-              onClick={() => navigate('/login/management')}
-            >
-              Management
             </Button>
           </div>
         </Card>

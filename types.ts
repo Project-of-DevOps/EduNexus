@@ -25,12 +25,14 @@ export interface User {
   email: string;
   avatarUrl?: string; // optional profile image URL (Data URL in dev)
   role: UserRole;
+  orgType?: 'school' | 'institute';
 }
 
 export interface Student extends User {
   role: UserRole.Student;
   parentId: string;
   classId: string;
+  instituteId: string;
 }
 
 export interface Teacher extends User {
@@ -38,6 +40,7 @@ export interface Teacher extends User {
   department: string;
   instituteId: string;
   reportingToId: string; // HOD's ID
+  orgType?: 'school' | 'institute';
 }
 
 // More granular titles/ranks for teachers/leadership roles in the institute
@@ -83,11 +86,13 @@ export interface Dean extends User { // Represents HOD
 export interface Parent extends User {
   role: UserRole.Parent;
   childIds: string[];
+  instituteId?: string;
 }
 
 export interface Management extends User {
   role: UserRole.Management;
   instituteId: string;
+  type: 'school' | 'institute';
 }
 
 export type LoggedInUser = Student | Teacher | Parent | Dean | Management;
@@ -97,6 +102,7 @@ export interface Class {
   name: string;
   teacherIds: string[];
   studentIds: string[];
+  departmentId: string;
 }
 
 export interface AttendanceRecord {

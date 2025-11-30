@@ -8,7 +8,10 @@ interface ChartData {
 }
 
 interface SubjectPieChartProps {
-  data: ChartData[];
+  // Recharts expects a more permissive shape (ChartDataInput). Cast to any
+  // so we can pass the same lightweight shape from our pages without failing
+  // the strict ChartDataInput typing.
+  data: ChartData[] | any[];
 }
 
 const COLORS = ['#0ea5e9', '#3b82f6', '#6366f1', '#8b5cf6', '#a855f7'];
@@ -31,7 +34,7 @@ const SubjectPieChart: React.FC<SubjectPieChartProps> = ({ data }) => {
     <ResponsiveContainer width="100%" height={300}>
       <PieChart>
         <Pie
-          data={data}
+          data={data as any}
           cx="50%"
           cy="50%"
           labelLine={false}

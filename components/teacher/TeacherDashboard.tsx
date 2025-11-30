@@ -14,9 +14,9 @@ import Input from '../ui/Input';
 
 // --- Task Management Components ---
 
-const TaskFormModal: React.FC<{ 
-    isOpen: boolean, 
-    onClose: () => void, 
+const TaskFormModal: React.FC<{
+    isOpen: boolean,
+    onClose: () => void,
     teacherClasses: Class[],
     taskToEdit?: Task | null
 }> = ({ isOpen, onClose, teacherClasses, taskToEdit }) => {
@@ -28,11 +28,11 @@ const TaskFormModal: React.FC<{
     const [description, setDescription] = useState(taskToEdit?.description || '');
     const [dueDate, setDueDate] = useState(taskToEdit?.dueDate ? new Date(taskToEdit.dueDate).toISOString().substring(0, 10) : '');
     const [priority, setPriority] = useState<Task['priority']>(taskToEdit?.priority || 'Medium');
-    
+
     const studentsInClass = useMemo(() => students.filter(s => s.classId === classId), [classId, students]);
 
     const handleStudentCheck = (studentId: string) => {
-        setAssignedStudents(prev => 
+        setAssignedStudents(prev =>
             prev.includes(studentId) ? prev.filter(id => id !== studentId) : [...prev, studentId]
         );
     };
@@ -44,7 +44,7 @@ const TaskFormModal: React.FC<{
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         if (!user || !classId || assignedStudents.length === 0) return;
-        
+
         // In a real app, you would handle editing differently
         if (taskToEdit) {
             console.log("Editing task", taskToEdit.id); // Placeholder
@@ -68,7 +68,7 @@ const TaskFormModal: React.FC<{
                 <Input id="title" label="Task Title" value={title} onChange={e => setTitle(e.target.value)} required />
                 <div>
                     <label htmlFor="description" className="block mb-2 text-sm font-medium text-[rgb(var(--text-color))]">Description</label>
-                    <textarea id="description" value={description} onChange={e => setDescription(e.target.value)} rows={3} className="bg-[rgba(var(--text-color),0.02)] border border-[rgb(var(--border-color))] text-[rgb(var(--text-color))] sm:text-sm rounded-lg focus:ring-1 focus:ring-[rgb(var(--ring-color))] focus:border-[rgb(var(--primary-color))] block w-full p-2.5" />
+                    <textarea id="description" value={description} onChange={e => setDescription(e.target.value)} rows={3} className="bg-[rgb(var(--foreground-color))] border border-[rgb(var(--border-color))] text-[rgb(var(--text-color))] caret-[rgb(var(--text-color))] sm:text-sm rounded-lg focus:ring-1 focus:ring-[rgb(var(--ring-color))] focus:border-[rgb(var(--primary-color))] block w-full p-2.5" />
                 </div>
                 <Select id="class" label="Assign to Class" value={classId} onChange={e => setClassId(e.target.value)} required>
                     <option value="">-- Select a Class --</option>
@@ -107,7 +107,7 @@ const TaskDetailView: React.FC<{ task: Task, onBack: () => void }> = ({ task, on
     const { studentTasks, students, classes } = useData();
     const relevantStudentTasks = studentTasks.filter(st => st.taskId === task.id);
     const className = classes.find(c => c.id === task.classId)?.name || 'Unknown Class';
-    
+
     const studentsWithStatus = relevantStudentTasks.map(st => {
         const student = students.find(s => s.id === st.studentId);
         return {
@@ -148,15 +148,15 @@ const TaskDetailView: React.FC<{ task: Task, onBack: () => void }> = ({ task, on
             </div>
 
             <div className="mt-6">
-                 <h3 className="font-bold text-lg mb-2">Student Status</h3>
-                 <ul className="space-y-2 max-h-80 overflow-y-auto">
+                <h3 className="font-bold text-lg mb-2">Student Status</h3>
+                <ul className="space-y-2 max-h-80 overflow-y-auto">
                     {studentsWithStatus.map(st => (
                         <li key={st.id} className="flex justify-between items-center p-2 bg-[rgb(var(--subtle-background-color))] rounded-lg">
                             <span>{st.studentName}</span>
                             <span className={`px-2 py-1 text-xs font-semibold rounded-full ${st.status === 'Completed' ? 'bg-[rgb(var(--success-subtle-color))] text-[rgb(var(--success-text-color))]' : 'bg-[rgb(var(--warning-subtle-color))] text-[rgb(var(--warning-text-color))]'}`}>{st.status}</span>
                         </li>
                     ))}
-                 </ul>
+                </ul>
             </div>
         </Card>
     )
@@ -178,7 +178,7 @@ const TeacherTaskPage: React.FC<{ teacherClasses: Class[] }> = ({ teacherClasses
         const selectedTask = tasks.find(t => t.id === view.taskId);
         return selectedTask ? <TaskDetailView task={selectedTask} onBack={() => setView({ type: 'list' })} /> : <div>Task not found</div>;
     }
-    
+
     return (
         <div>
             <div className="flex justify-between items-center mb-6">
@@ -286,28 +286,28 @@ const DepartmentManager: React.FC = () => {
                         </div>
                         <div className="flex items-center gap-2 mt-2 md:mt-0">
                             <label className="text-sm mr-2">Title</label>
-                                                        {(() => {
-                                                                const currentRank = TEACHER_TITLE_RANK[currentTitle] || 0;
-                                                                const targetRank = TEACHER_TITLE_RANK[(t as any).title || 'subject-teacher'] || 0;
-                                                                const canEdit = currentRank > targetRank;
-                                                                return (
-                                                                    <select value={(t as any).title || 'subject-teacher'} onChange={(e) => canEdit && setUserTitle(t.id, e.target.value)} disabled={!canEdit} className="p-1 border rounded">
-                                                                        {TEACHER_TITLES.map(tt => (
-                                                                                <option key={tt.id} value={tt.id}>{tt.name}</option>
-                                                                        ))}
-                                                                    </select>
-                                                                );
-                                                        })()}
-                            
+                            {(() => {
+                                const currentRank = TEACHER_TITLE_RANK[currentTitle] || 0;
+                                const targetRank = TEACHER_TITLE_RANK[(t as any).title || 'subject-teacher'] || 0;
+                                const canEdit = currentRank > targetRank;
+                                return (
+                                    <select value={(t as any).title || 'subject-teacher'} onChange={(e) => canEdit && setUserTitle(t.id, e.target.value)} disabled={!canEdit} className="p-1 border rounded">
+                                        {TEACHER_TITLES.map(tt => (
+                                            <option key={tt.id} value={tt.id}>{tt.name}</option>
+                                        ))}
+                                    </select>
+                                );
+                            })()}
+
                             <Button onClick={() => deleteUser(t.id)} variant="danger" size="sm">Delete</Button>
                         </div>
-                        { (t as any).subjects && (t as any).subjects.length > 0 && (
+                        {(t as any).subjects && (t as any).subjects.length > 0 && (
                             <div className="w-full mt-2 md:mt-0 md:w-auto text-sm text-[rgb(var(--text-secondary-color))]">Subjects: {(t as any).subjects.join(', ')}</div>
                         )}
                     </li>
                 ))}
             </ul>
-             <Button className="mt-4">Add Teacher to Department</Button>
+            <Button className="mt-4">Add Teacher to Department</Button>
         </Card>
     );
 };
@@ -315,7 +315,7 @@ const DepartmentManager: React.FC = () => {
 const AddStudentForm: React.FC<{ classId: string, onClose: () => void }> = ({ classId, onClose }) => {
     // In a real app, this would call a context function to add the student
     return (
-         <form className="space-y-4">
+        <form className="space-y-4">
             <h3 className="text-lg font-bold">Add Student to Class {classId}</h3>
             <Input id="name" label="Student Name" required />
             <Input id="email" label="Student Email" type="email" required />
@@ -331,12 +331,12 @@ const ClassView: React.FC<{ classObj: Class, setView: (view: string) => void }> 
     const { students } = useData();
     const [isAddStudentModalOpen, setAddStudentModalOpen] = useState(false);
     const classStudents = students.filter(s => classObj.studentIds.includes(s.id));
-    
+
     return (
         <div className="space-y-6">
-             <div className="flex justify-between items-center">
+            <div className="flex justify-between items-center">
                 <h2 className="text-2xl font-bold">Class: {classObj.name}</h2>
-                 <Button onClick={() => setAddStudentModalOpen(true)}>Add Student</Button>
+                <Button onClick={() => setAddStudentModalOpen(true)}>Add Student</Button>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <Button onClick={() => setView('attendance')} className="p-6 text-left">Manage Attendance</Button>
@@ -365,74 +365,84 @@ const Icon = ({ path }: { path: string }) => (
 );
 
 const TeacherDashboard: React.FC = () => {
-  const [activeItem, setActiveItem] = useState('Dashboard');
-  const [selectedClassId, setSelectedClassId] = useState<string | null>(null);
-  const [currentView, setCurrentView] = useState('dashboard'); // dashboard, class, attendance, marks
-  const [showMessages, setShowMessages] = useState(false);
-  
+    const [activeItem, setActiveItem] = useState('Dashboard');
+    const [selectedClassId, setSelectedClassId] = useState<string | null>(null);
+    const [currentView, setCurrentView] = useState('dashboard'); // dashboard, class, attendance, marks
+    const [showMessages, setShowMessages] = useState(false);
+
     const { user } = useAuth();
-    const { classes, users, updateTeacherSubjects } = useData();
+    const { classes, users, updateTeacherSubjects, departments } = useData();
 
     const me = users.find(u => u.id === user?.id) as (TeacherExtended | undefined);
     const mySubjects = me?.subjects || [];
     const [manageNewSubject, setManageNewSubject] = useState('');
-  
-  const teacherClasses = useMemo(() => 
-    classes.filter(c => c.teacherIds.includes(user!.id)),
-    [classes, user]
-  );
 
-  const selectedClass = useMemo(() => 
-    selectedClassId ? classes.find(c => c.id === selectedClassId) : null, 
-    [selectedClassId, classes]
-  );
-  
-  const handleSelectClass = (classId: string) => {
-    setSelectedClassId(classId);
-    setCurrentView('class');
-  };
+    const teacherClasses = useMemo(() => {
+        // Identify the teacher's institute id (when available) so we only
+        // surface classes that belong to the teacher's institute
+        const myInstituteId = (user as any)?.instituteId || null;
+        return classes.filter(c => {
+            // ensure teacher is assigned
+            if (!c.teacherIds.includes(user!.id)) return false;
+            // if a department exists for the class, ensure its instituteId matches
+            const dept = departments.find(d => d.id === c.departmentId);
+            if (dept && myInstituteId) return dept.instituteId === myInstituteId;
+            // fallback: include class when department not found or no institute scoping
+            return true;
+        });
+    }, [classes, user, departments]);
 
-  const resetToDashboard = () => {
-      setSelectedClassId(null);
-      setCurrentView('dashboard');
-  }
+    const selectedClass = useMemo(() =>
+        selectedClassId ? classes.find(c => c.id === selectedClassId) : null,
+        [selectedClassId, classes]
+    );
 
-  const navItems = [
-    { name: 'Dashboard', icon: <Icon path="M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1.5-1.5m1.5 1.5l1.5-1.5m0 0l1.5 1.5m-1.5-1.5l-1.5 1.5" /> },
-    { name: 'Upload PDF', icon: <Icon path="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" /> },
-    { name: 'Upload Model Paper', icon: <Icon path="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" /> },
-    { name: 'Announcements', icon: <Icon path="M10.34 15.84c-.688-.06-1.386-.09-2.09-.09H7.5a4.5 4.5 0 01-4.5-4.5V7.5a4.5 4.5 0 014.5-4.5h7.5a4.5 4.5 0 014.5 4.5v3.84" /> },
-    { name: 'Profile', icon: <Icon path="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.5 19.5a8.25 8.25 0 0115 0" /> }
-  ];
-  
-  if (user?.role === UserRole.Dean) {
-    navItems.splice(1, 0, { name: 'Department Mgmt', icon: <Icon path="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m-7.512 2.72a3 3 0 01-4.682-2.72 9.094 9.094 0 013.741-.479m-4.26 9.574a4.5 4.5 0 01-.223-1.99a4.5 4.5 0 01.223-1.99m13.486 0a4.5 4.5 0 00-.223-1.99a4.5 4.5 0 00.223-1.99m-13.486 0a4.5 4.5 0 00.223 1.99" /> },
-    { name: 'Task Management', icon: <Icon path="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /> });
-  } else {
-    navItems.splice(1, 0, { name: 'Task Management', icon: <Icon path="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /> });
-  }
+    const handleSelectClass = (classId: string) => {
+        setSelectedClassId(classId);
+        setCurrentView('class');
+    };
 
-  const breadcrumbs = [
-      { name: 'Dashboard', action: resetToDashboard },
-      ...(selectedClassId ? [{ name: selectedClass?.name || 'Class', action: () => setCurrentView('class') }] : []),
-      ...(currentView === 'attendance' ? [{ name: 'Attendance' }] : []),
-      ...(currentView === 'marks' ? [{ name: 'Marks' }] : []),
-  ];
-
-  const renderContent = () => {
-    if (showMessages) {
-        return <MessagesView />;
+    const resetToDashboard = () => {
+        setSelectedClassId(null);
+        setCurrentView('dashboard');
     }
-    
-    switch (activeItem) {
-        case 'Dashboard':
-            if (currentView === 'class' && selectedClass) return <ClassView classObj={selectedClass} setView={setCurrentView} />;
-            if (currentView === 'attendance' && selectedClassId) return <AttendanceManager classId={selectedClassId} onBack={() => setCurrentView('class')} />;
-            if (currentView === 'marks' && selectedClassId) return <MarksManager classId={selectedClassId} onBack={() => setCurrentView('class')} />;
-            
-            // Default Dashboard View
-            return (
-              <div className="space-y-6">
+
+    const navItems = [
+        { name: 'Dashboard', icon: <Icon path="M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1.5-1.5m1.5 1.5l1.5-1.5m0 0l1.5 1.5m-1.5-1.5l-1.5 1.5" /> },
+        { name: 'Upload PDF', icon: <Icon path="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" /> },
+        { name: 'Upload Model Paper', icon: <Icon path="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" /> },
+        { name: 'Announcements', icon: <Icon path="M10.34 15.84c-.688-.06-1.386-.09-2.09-.09H7.5a4.5 4.5 0 01-4.5-4.5V7.5a4.5 4.5 0 014.5-4.5h7.5a4.5 4.5 0 014.5 4.5v3.84" /> },
+        { name: 'Profile', icon: <Icon path="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.5 19.5a8.25 8.25 0 0115 0" /> }
+    ];
+
+    if (user?.role === UserRole.Dean) {
+        navItems.splice(1, 0, { name: 'Department Mgmt', icon: <Icon path="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m-7.512 2.72a3 3 0 01-4.682-2.72 9.094 9.094 0 013.741-.479m-4.26 9.574a4.5 4.5 0 01-.223-1.99a4.5 4.5 0 01.223-1.99m13.486 0a4.5 4.5 0 00-.223-1.99a4.5 4.5 0 00.223-1.99m-13.486 0a4.5 4.5 0 00.223 1.99" /> },
+            { name: 'Task Management', icon: <Icon path="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /> });
+    } else {
+        navItems.splice(1, 0, { name: 'Task Management', icon: <Icon path="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /> });
+    }
+
+    const breadcrumbs = [
+        { name: 'Dashboard', action: resetToDashboard },
+        ...(selectedClassId ? [{ name: selectedClass?.name || 'Class', action: () => setCurrentView('class') }] : []),
+        ...(currentView === 'attendance' ? [{ name: 'Attendance' }] : []),
+        ...(currentView === 'marks' ? [{ name: 'Marks' }] : []),
+    ];
+
+    const renderContent = () => {
+        if (showMessages) {
+            return <MessagesView />;
+        }
+
+        switch (activeItem) {
+            case 'Dashboard':
+                if (currentView === 'class' && selectedClass) return <ClassView classObj={selectedClass} setView={setCurrentView} />;
+                if (currentView === 'attendance' && selectedClassId) return <AttendanceManager classId={selectedClassId} onBack={() => setCurrentView('class')} />;
+                if (currentView === 'marks' && selectedClassId) return <MarksManager classId={selectedClassId} onBack={() => setCurrentView('class')} />;
+
+                // Default Dashboard View
+                return (
+                    <div className="space-y-6">
                         <h2 className="text-3xl font-bold">Your Classes</h2>
                         {user?.role === UserRole.Teacher && (
                             <Card className="mt-4">
@@ -461,53 +471,53 @@ const TeacherDashboard: React.FC = () => {
                                 </div>
                             </Card>
                         )}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {teacherClasses.map(c => (
-                    <Card key={c.id} className="hover:shadow-lg transition-shadow">
-                      <h3 className="font-bold text-xl">{c.name}</h3>
-                      <p className="text-sm text-[rgb(var(--text-secondary-color))]">{c.studentIds.length} Students</p>
-                      <Button onClick={() => handleSelectClass(c.id)} className="mt-4 w-full">Manage Class</Button>
-                    </Card>
-                  ))}
-                </div>
-              </div>
-            );
-        case 'Department Mgmt':
-            return <DepartmentManager />;
-        case 'Task Management':
-            return <TeacherTaskPage teacherClasses={teacherClasses} />;
-        case 'Upload PDF':
-            return <DocumentUploader />;
-        case 'Upload Model Paper':
-            return <ModelPaperUploader />;
-        case 'Announcements':
-            return <div>Announcements Coming Soon</div>;
-        case 'Profile':
-            return <ProfileView />;
-        default:
-            return <div>Select an item from the sidebar</div>;
-    }
-  };
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                            {teacherClasses.map(c => (
+                                <Card key={c.id} className="hover:shadow-lg transition-shadow">
+                                    <h3 className="font-bold text-xl">{c.name}</h3>
+                                    <p className="text-sm text-[rgb(var(--text-secondary-color))]">{c.studentIds.length} Students</p>
+                                    <Button onClick={() => handleSelectClass(c.id)} className="mt-4 w-full">Manage Class</Button>
+                                </Card>
+                            ))}
+                        </div>
+                    </div>
+                );
+            case 'Department Mgmt':
+                return <DepartmentManager />;
+            case 'Task Management':
+                return <TeacherTaskPage teacherClasses={teacherClasses} />;
+            case 'Upload PDF':
+                return <DocumentUploader />;
+            case 'Upload Model Paper':
+                return <ModelPaperUploader />;
+            case 'Announcements':
+                return <div>Announcements Coming Soon</div>;
+            case 'Profile':
+                return <ProfileView />;
+            default:
+                return <div>Select an item from the sidebar</div>;
+        }
+    };
 
-  return (
-    <Layout navItems={navItems} activeItem={activeItem} setActiveItem={setActiveItem} setShowMessages={setShowMessages} profileNavItemName="Profile">
-        <div className="mb-4">
-            <nav className="flex" aria-label="Breadcrumb">
-                <ol className="inline-flex items-center space-x-1 md:space-x-3">
-                    {breadcrumbs.map((crumb, index) => (
-                        <li key={crumb.name} className="inline-flex items-center">
-                            {index > 0 && <svg className="w-6 h-6 text-[rgb(var(--text-secondary-color))]" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd"></path></svg>}
-                            <button onClick={crumb.action} disabled={!crumb.action} className={`text-sm font-medium ${index === breadcrumbs.length - 1 ? 'text-[rgb(var(--text-secondary-color))]' : 'text-[rgb(var(--primary-color))] hover:text-[rgb(var(--primary-color-dark))]'}`}>
-                                {crumb.name}
-                            </button>
-                        </li>
-                    ))}
-                </ol>
-            </nav>
-        </div>
-        {renderContent()}
-    </Layout>
-  );
+    return (
+        <Layout navItems={navItems} activeItem={activeItem} setActiveItem={setActiveItem} setShowMessages={setShowMessages} profileNavItemName="Profile">
+            <div className="mb-4">
+                <nav className="flex" aria-label="Breadcrumb">
+                    <ol className="inline-flex items-center space-x-1 md:space-x-3">
+                        {breadcrumbs.map((crumb, index) => (
+                            <li key={crumb.name} className="inline-flex items-center">
+                                {index > 0 && <svg className="w-6 h-6 text-[rgb(var(--text-secondary-color))]" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd"></path></svg>}
+                                <button onClick={crumb.action} disabled={!crumb.action} className={`text-sm font-medium ${index === breadcrumbs.length - 1 ? 'text-[rgb(var(--text-secondary-color))]' : 'text-[rgb(var(--primary-color))] hover:text-[rgb(var(--primary-color-dark))]'}`}>
+                                    {crumb.name}
+                                </button>
+                            </li>
+                        ))}
+                    </ol>
+                </nav>
+            </div>
+            {renderContent()}
+        </Layout>
+    );
 };
 
 export default TeacherDashboard;

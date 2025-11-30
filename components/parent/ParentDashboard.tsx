@@ -109,7 +109,10 @@ const ParentDashboard: React.FC = () => {
   const parentUser = user as Parent;
   
     const { users } = useData();
-    const childrenData = useMemo(() => users.filter(u => parentUser.childIds.includes(u.id)) as Student[], [users, parentUser.childIds]);
+    const childrenData = useMemo(() => users.filter(u => parentUser.childIds.includes(u.id) && (
+        // strictly scope children to same instituteId when present, otherwise fall back to orgType matching
+        ((u as any).instituteId && parentUser.instituteId ? (u as any).instituteId === parentUser.instituteId : true)
+    )) as Student[], [users, parentUser.childIds, parentUser.instituteId]);
     const parentAccounts = useMemo(() => users.filter(u => u.role === UserRole.Parent) as Parent[], [users]);
   
   const [selectedChildId, setSelectedChildId] = useState(childrenData[0]?.id || '');

