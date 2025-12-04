@@ -71,7 +71,7 @@ const Layout: React.FC<LayoutProps> = ({
     ? ((user as any).type === 'school' ? 'Switch to Institute' : 'Switch to School')
     : 'Switch Account';
 
-  const handleSwitchAccount = (e: React.FormEvent) => {
+  const handleSwitchAccount = async (e: React.FormEvent) => {
     e.preventDefault();
     setSwitchError('');
 
@@ -82,8 +82,8 @@ const Layout: React.FC<LayoutProps> = ({
 
     const foundUsers = users.filter(u => u.email.toLowerCase() === switchEmail.toLowerCase());
 
-    const tryLogin = (role: UserRole, extra?: Record<string, any>) => {
-      const ok = login(switchEmail, switchPassword, role, extra);
+    const tryLogin = async (role: UserRole, extra?: Record<string, any>) => {
+      const ok = await login(switchEmail, switchPassword, role, extra);
       if (ok) {
         success = true;
         targetRole = role;
@@ -94,20 +94,20 @@ const Layout: React.FC<LayoutProps> = ({
     if (foundUsers.length > 0) {
       for (const u of foundUsers) {
         if (u.role === UserRole.Management) {
-          if ((u as any).type && tryLogin(UserRole.Management, { type: (u as any).type })) break;
-          if (tryLogin(UserRole.Management, { type: 'school' })) break;
-          if (tryLogin(UserRole.Management, { type: 'institute' })) break;
+          if ((u as any).type && await tryLogin(UserRole.Management, { type: (u as any).type })) break;
+          if (await tryLogin(UserRole.Management, { type: 'school' })) break;
+          if (await tryLogin(UserRole.Management, { type: 'institute' })) break;
         } else {
-          if (tryLogin(u.role)) break;
+          if (await tryLogin(u.role)) break;
         }
       }
     } else {
       const roles = Object.values(UserRole);
       for (const role of roles) {
         if (role === UserRole.Management) {
-          if (tryLogin(UserRole.Management, { type: 'school' })) break;
-          if (tryLogin(UserRole.Management, { type: 'institute' })) break;
-        } else if (tryLogin(role)) break;
+          if (await tryLogin(UserRole.Management, { type: 'school' })) break;
+          if (await tryLogin(UserRole.Management, { type: 'institute' })) break;
+        } else if (await tryLogin(role)) break;
       }
     }
 
@@ -143,7 +143,7 @@ const Layout: React.FC<LayoutProps> = ({
     }
   };
 
-  const handleSignUp = (e: React.FormEvent) => {
+  const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
     setSwitchError('');
 
@@ -182,7 +182,7 @@ const Layout: React.FC<LayoutProps> = ({
       : (signUpName || 'New User');
 
     // Use the signUp function from AuthContext
-    const success = signUp(displayName, signUpEmail, signUpPassword, roleToCreate, extra);
+    const success = await signUp(displayName, signUpEmail, signUpPassword, roleToCreate, extra);
 
     if (success) {
       setIsSwitchModalOpen(false);

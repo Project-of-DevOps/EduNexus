@@ -4,30 +4,42 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+      "worker:once": "node server/outboxWorker.js --once",
+      "worker:run": "node server/outboxWorker.js",
+      "dev": "vite",
     "test": "vitest",
     "test:ui": "vitest --ui",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
+
+    "imap-simple": "^6.0.0",
+    "nodemailer": "^6.9.3",
+    "docx": "^8.3.1",
+    "jspdf": "^2.5.1",
+    "xlsx": "^0.18.5",
     "@google/genai": "^1.30.0",
+    "axios": "^1.13.2",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.9.6",
     "recharts": "^3.4.1"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^6.0.0",
+    "@testing-library/react": "^14.0.0",
+    "@testing-library/user-event": "^14.4.3",
     "@types/node": "^22.14.0",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.0.0",
+    "jsdom": "^22.1.0",
+    "supertest": "^6.3.3",
     "typescript": "~5.8.2",
     "vite": "^6.2.0",
     "vitest": "^1.1.4",
-    "@testing-library/react": "^14.0.0",
-    "@testing-library/jest-dom": "^6.0.0",
-    "@testing-library/user-event": "^14.4.3",
-    "jsdom": "^22.1.0"
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.11.1"
   }
 }

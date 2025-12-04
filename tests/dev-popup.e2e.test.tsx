@@ -14,7 +14,7 @@ describe('Dev popup (e2e)', () => {
   it('shows popup when developer receives code request', async () => {
     const flow = async (ctx: any) => {
       // create a management code request - should notify storageeapp@gmail.com
-      ctx.createOrgCodeRequest({ orgType: 'institute', instituteId: 'test-inst', managementEmail: 'mgmt@x.test' });
+      await ctx.createOrgCodeRequest({ orgType: 'institute', instituteId: 'test-inst', managementEmail: 'mgmt@x.test' });
     };
 
     render(

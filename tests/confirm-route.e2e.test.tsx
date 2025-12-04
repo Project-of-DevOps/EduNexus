@@ -9,9 +9,11 @@ const Starter: React.FC<{ managementEmail: string }> = ({ managementEmail }) => 
   const ctx = useData();
   const navigate = useNavigate();
   React.useEffect(() => {
-    const { token } = ctx.createOrgCodeRequest({ orgType: 'institute', instituteId: 'inst-x', managementEmail });
-    // navigate to confirmation URL as if clicked externally
-    navigate(`/confirm-code/${token}`);
+    (async () => {
+      const { token } = await ctx.createOrgCodeRequest({ orgType: 'institute', instituteId: 'inst-x', managementEmail });
+      // navigate to confirmation URL as if clicked externally
+      navigate(`/confirm-code/${token}`);
+    })();
   }, []);
   return <div>ok</div>;
 };

@@ -17,7 +17,7 @@ describe('Management code confirmation flow', () => {
       const managementEmail = 'management@example.test';
 
       // management creates a code request
-      const req = ctx.createOrgCodeRequest({ orgType: 'institute', instituteId: 'inst-42', managementEmail });
+      const req = await ctx.createOrgCodeRequest({ orgType: 'institute', instituteId: 'inst-42', managementEmail });
       expect(req.id).toBeTruthy();
       expect(req.token).toHaveLength(10);
 
@@ -27,7 +27,7 @@ describe('Management code confirmation flow', () => {
       expect(devNotes[0].message).toContain(req.token);
 
       // developer confirms the token
-      const confirmed = ctx.confirmOrgCodeRequest(req.token);
+      const confirmed = await ctx.confirmOrgCodeRequest(req.token);
       expect(confirmed).not.toBe(false);
       expect(confirmed?.success).toBe(true);
       expect(confirmed?.code).toHaveLength(6);

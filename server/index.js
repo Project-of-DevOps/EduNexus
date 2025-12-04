@@ -1,0 +1,1215 @@
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const bcrypt = require('bcrypt');
+const db = require('./db');
+let pool = db.pool;
+const logger = require('./utils/logger');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const jwt = require('jsonwebtoken');
+const cookieParser = require('cookie-parser');
+const axios = require('axios');
+const { signupSchema, loginSchema } = require('./utils/validation');
+
+// Environment Validation
+const requiredEnv = ['DATABASE_URL', 'JWT_SECRET'];
+const missingEnv = requiredEnv.filter(key => !process.env[key]);
+if (missingEnv.length > 0) {
+  // During tests we may not set real env vars. Don't crash the process in test
+  // mode — log a warning so tests can inject mocks. In production / dev we
+  // still want the process to fail fast when required env vars are missing.
+  const msg = `Missing required environment variables: ${missingEnv.join(', ')}`;
+  if (process.env.NODE_ENV === 'test') {
+    logger.warn(msg);
+  } else {
+    logger.error(msg);
+    process.exit(1);
+  }
+}
+
+const app = express();
+
+// Security Headers
+app.use(helmet());
+
+// CORS Configuration
+const allowedOrigins = [process.env.VITE_API_URL || 'http://localhost:5173', 'http://localhost:3000'];
+app.use(cors({
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) === -1) {
+      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+      return callback(new Error(msg), false);
+    }
+    return callback(null, true);
+  },
+  credentials: true
+}));
+
+app.use(cookieParser());
+
+// Rate Limiting
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  message: 'Too many login attempts from this IP, please try again after 15 minutes',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Apply rate limiting to auth routes
+app.use('/api/login', authLimiter);
+app.use('/api/signup', authLimiter);
+app.use('/api/forgot-password', authLimiter);
+
+const managementRoutes = require('./routes/management');
+app.use('/api/management', managementRoutes);
+
+app.use(express.json());
+
+const PORT = process.env.PORT || 4000;
+
+// Request Logging Middleware
+app.use((req, res, next) => {
+  logger.info(`${req.method} ${req.url}`);
+  next();
+});
+
+app.get('/api/health', (req, res) => res.json({ ok: true }));
+
+// ADMIN helper - lightweight auth using API key
+const checkAdminAuth = (req, res, next) => {
+  const key = req.headers['x-admin-key'] || req.query.adminKey;
+  if (!process.env.ADMIN_API_KEY) return res.status(403).json({ error: 'admin api key not configured' });
+  if (!key || String(key) !== String(process.env.ADMIN_API_KEY)) return res.status(401).json({ error: 'unauthorized' });
+  next();
+};
+
+// Admin endpoints to inspect outbox and trigger retries
+app.get('/api/admin/queue-stats', checkAdminAuth, async (req, res) => {
+  try {
+    const outbox = readJsonFile(OUTBOX_FILE);
+    res.json({ success: true, stats: { outboxCount: outbox.length } });
+  } catch (e) {
+    res.status(500).json({ error: 'failed' });
+  }
+});
+
+app.get('/api/admin/outbox', checkAdminAuth, async (req, res) => {
+  try {
+    const outbox = readJsonFile(OUTBOX_FILE);
+    res.json({ success: true, outbox });
+  } catch (e) { res.status(500).json({ error: 'failed' }); }
+});
+
+app.post('/api/admin/outbox/retry', checkAdminAuth, async (req, res) => {
+  try {
+    const outbox = readJsonFile(OUTBOX_FILE);
+    const results = [];
+    for (const msg of outbox.slice()) {
+      try {
+        await sendEmail(msg.to, msg.subject, msg.text);
+        msg.sent = true;
+        results.push({ id: msg.id, ok: true });
+      } catch (e) {
+        msg.attempts = (msg.attempts || 0) + 1;
+        results.push({ id: msg.id, ok: false, error: String(e?.message || e) });
+      }
+    }
+    const keep = outbox.filter(m => !m.sent && (m.attempts || 0) < 10);
+    writeJsonFile(OUTBOX_FILE, keep);
+    res.json({ success: true, results });
+  } catch (e) { res.status(500).json({ error: String(e?.message || e) }); }
+});
+
+
+// Token Helpers
+const generateAccessToken = (user) => {
+  return jwt.sign({ id: user.id, role: user.role, email: user.email }, process.env.JWT_SECRET, { expiresIn: '15m' });
+};
+
+const generateRefreshToken = (user) => {
+  return jwt.sign({ id: user.id, role: user.role, email: user.email }, process.env.JWT_SECRET, { expiresIn: '7d' });
+};
+
+// Auth Middleware
+const authenticateToken = (req, res, next) => {
+  const token = req.cookies.accessToken;
+  if (!token) return res.sendStatus(401);
+
+  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+    if (err) return res.sendStatus(403);
+    req.user = user;
+    next();
+  });
+};
+
+const nodemailer = require('nodemailer');
+// Optional SendGrid direct API usage (preferred when SENDGRID_API_KEY present)
+let sendgrid = null;
+if (process.env.SENDGRID_API_KEY) {
+  try {
+    sendgrid = require('@sendgrid/mail');
+    sendgrid.setApiKey(process.env.SENDGRID_API_KEY);
+  } catch (e) {
+    logger.warn('sendgrid package not installed or failed to load, falling back to nodemailer SMTP', e?.message || e);
+    sendgrid = null;
+  }
+}
+const fs = require('fs');
+const path = require('path');
+const cloudStorage = require('./cloudStorage');
+
+const DATA_DIR = path.join(__dirname, 'data');
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+const OUTBOX_FILE = path.join(DATA_DIR, 'outbox.json');
+const QUEUE_FILE = path.join(DATA_DIR, 'signup_queue_disk.json');
+
+// Load disk queues safely
+const readJsonFile = (file) => {
+  try {
+    if (!fs.existsSync(file)) return [];
+    const raw = fs.readFileSync(file, 'utf8');
+    if (!raw) return [];
+    return JSON.parse(raw || '[]');
+  } catch (e) {
+    logger.warn('Failed reading json file', file, e);
+    return [];
+  }
+};
+
+const writeJsonFile = (file, data) => {
+  try {
+    fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf8');
+  } catch (e) {
+    logger.error('Failed writing json file', file, e);
+  }
+};
+
+// Append a message to outbox and persist
+const appendOutbox = (mail) => {
+  const cur = readJsonFile(OUTBOX_FILE);
+  // Ensure consistent metadata for audited status / retries
+  const entry = {
+    id: `out_${Date.now()}`,
+    to: mail.to,
+    subject: mail.subject,
+    text: mail.text,
+    createdAt: new Date().toISOString(),
+    sent: false,
+    attempts: 0,
+    history: []
+  };
+  cur.unshift(entry);
+  writeJsonFile(OUTBOX_FILE, cur);
+  return entry;
+};
+
+const appendInbound = (obj) => {
+  try {
+    const file = path.join(DATA_DIR, 'inbound.json');
+    const cur = readJsonFile(file);
+    const entry = { id: `in_${Date.now()}`, ...obj, receivedAt: new Date().toISOString() };
+    cur.unshift(entry);
+    writeJsonFile(file, cur);
+    return entry;
+  } catch (e) {
+    logger.warn('appendInbound failed', e?.message || e);
+    return null;
+  }
+};
+
+// Queue a signup payload to disk when DB is unavailable
+const appendSignupQueueDisk = async (signupData) => {
+  try {
+    const cur = readJsonFile(QUEUE_FILE);
+    const entry = {
+      id: `signup_${Date.now()}`,
+      name: signupData.name,
+      email: signupData.email,
+      password_hash: signupData.password_hash,
+      role: signupData.role || 'Management',
+      extra: signupData.extra || {},
+      status: 'queued',
+      attempts: 0,
+      createdAt: new Date().toISOString(),
+      history: []
+    };
+    cur.unshift(entry);
+    writeJsonFile(QUEUE_FILE, cur);
+    logger.info(`Signup queued to disk: ${signupData.email}`);
+
+    // Fire-and-forget: attempt to upload a backup of the queue to GCS so data survives machine loss
+    try {
+      const destName = `backups/signup_queue_disk_${Date.now()}.json`;
+      // upload the local queue file as a backup (non-blocking)
+      cloudStorage.uploadFile(QUEUE_FILE, destName).catch(err => {
+        logger.warn('Failed uploading signup queue backup to GCS', err?.message || err);
+      });
+    } catch (err) {
+      logger.warn('Cloud upload attempt failed (skipped)', err?.message || err);
+    }
+
+    return entry;
+  } catch (e) {
+    logger.error('Failed to queue signup to disk', e?.message || e);
+    return null;
+  }
+};
+
+// Admin: view inbound messages stored on disk (if inbound polling/webhooks saved them)
+app.get('/api/admin/inbound', checkAdminAuth, (req, res) => {
+  try {
+    const inboundFile = path.join(DATA_DIR, 'inbound.json');
+    const inbound = readJsonFile(inboundFile);
+    res.json({ success: true, inbound });
+  } catch (e) {
+    res.status(500).json({ error: 'failed' });
+  }
+});
+
+// Inbound webhook for hosted email providers (optional)
+// Configure providers like SendGrid Inbound Parse to POST to this endpoint.
+// For safety you can set WEBHOOK_SECRET env var and include X-Inbound-Key header on requests.
+app.post('/api/webhook/inbound', async (req, res) => {
+  try {
+    if (process.env.WEBHOOK_SECRET) {
+      const key = req.headers['x-inbound-key'] || req.query.key;
+      if (!key || String(key) !== String(process.env.WEBHOOK_SECRET)) return res.status(403).json({ error: 'invalid webhook key' });
+    }
+    const payload = req.body || {};
+    // normalize common fields
+    const message = {
+      from: payload.from || payload.envelope && payload.envelope.from || payload.sender,
+      to: payload.to || payload.envelope && payload.envelope.to || payload.recipient,
+      subject: payload.subject || payload.headers && payload.headers.subject || '',
+      body: payload.text || payload.html || payload.body || ''
+    };
+    appendInbound(message);
+    // Optionally notify admin developer if configured
+    if (process.env.ADMIN_ALERT_EMAIL) {
+      appendOutbox({ to: process.env.ADMIN_ALERT_EMAIL, subject: `Inbound mail received: ${message.subject}`, text: `From: ${message.from}\nTo: ${message.to}\n\n${String(message.body).slice(0, 1000)}` });
+    }
+    res.json({ success: true });
+  } catch (e) {
+    logger.warn('inbound webhook error', e?.message || e);
+    res.status(500).json({ error: 'failed' });
+  }
+});
+
+
+// On startup, attempt to process disk queues and outbox
+const processDiskQueuesOnStartup = async () => {
+  // Process signup queue first: attempt to insert queued signups back into DB
+  try {
+    const signupQueue = readJsonFile(QUEUE_FILE);
+    if (Array.isArray(signupQueue) && signupQueue.length) {
+      logger.info('Processing disk signup queue', signupQueue.length);
+      for (const item of signupQueue.slice()) {
+        try {
+          // Attempt to insert the queued signup into the database
+          const r = await pool.query(
+            'INSERT INTO users (name,email,password_hash,role,extra) VALUES ($1,$2,$3,$4,$5) RETURNING id,name,email,role,created_at',
+            [item.name || null, item.email, item.password_hash, item.role || 'Management', item.extra || {}]
+          );
+
+          if (r && r.rows && r.rows[0]) {
+            // Successfully inserted, mark item as synced
+            item.status = 'synced';
+            item.attempts = (item.attempts || 0) + 1;
+            logger.info(`Recovered queued signup: ${item.email} (ID: ${r.rows[0].id})`);
+            console.log(`\n[DEV NOTICE] Successfully recovered queued signup for: ${item.email}. Data is now in the database.\n`);
+
+            // Record in audit log
+            try {
+              await pool.query(
+                'INSERT INTO signup_syncs (email, status, attempts, note) VALUES ($1,$2,$3,$4)',
+                [item.email, 'synced', item.attempts, 'recovered from disk queue on startup']
+              );
+            } catch (auditErr) {
+              logger.warn('Failed to record startup recovery audit', auditErr?.message);
+            }
+          }
+        } catch (e) {
+          item.attempts = (item.attempts || 0) + 1;
+          logger.warn('Failed to recover queued signup, attempts:', item.attempts, item.email, e?.message);
+          // Keep it queued for next retry if attempts < 10
+          if (item.attempts >= 10) {
+            item.status = 'failed';
+            logger.error('Giving up on signup queue item after 10 attempts:', item.email);
+          }
+        }
+      }
+      // Keep only queued/pending items (not synced or failed after 10 attempts)
+      const pending = signupQueue.filter(m => m.status !== 'synced' && (m.attempts || 0) < 10);
+      writeJsonFile(QUEUE_FILE, pending);
+    }
+  } catch (e) {
+    logger.warn('Failed processing signup queue on startup', e);
+  }
+
+  // process outbox: attempt to send emails
+  try {
+    const outbox = readJsonFile(OUTBOX_FILE);
+    if (Array.isArray(outbox) && outbox.length) {
+      logger.info('Processing disk outbox messages', outbox.length);
+      for (const msg of outbox.slice()) {
+        try {
+          await sendEmail(msg.to, msg.subject, msg.text);
+          msg.sent = true;
+        } catch (e) {
+          msg.attempts = (msg.attempts || 0) + 1;
+          logger.warn('Failed sending outbox message, attempts:', msg.attempts, msg.id);
+        }
+      }
+      // keep only unsent items
+      const unsent = outbox.filter(m => !m.sent && (m.attempts || 0) < 10);
+      writeJsonFile(OUTBOX_FILE, unsent);
+    }
+  } catch (e) {
+    logger.warn('Failed processing outbox on startup', e);
+  }
+
+};
+
+// Kick off startup processing async (do not block server startup)
+process.nextTick(() => void processDiskQueuesOnStartup());
+
+// Monitoring / Alerts: check queue lengths and notify admin email if backlogs exceed thresholds
+const checkQueueAlerts = async () => {
+  try {
+    const signupQueue = readJsonFile(QUEUE_FILE);
+    const outbox = readJsonFile(OUTBOX_FILE);
+    const orgDisk = readJsonFile(path.join(DATA_DIR, 'org_code_requests_disk.json'));
+
+    const signupThreshold = Number(process.env.ALERT_SIGNUP_THRESHOLD || '50');
+    const outboxThreshold = Number(process.env.ALERT_OUTBOX_THRESHOLD || '50');
+    const orgThreshold = Number(process.env.ALERT_ORG_REQ_THRESHOLD || '50');
+
+    const issues = [];
+    if (signupQueue.length >= signupThreshold) issues.push(`signupQueue ${signupQueue.length}`);
+    if (outbox.length >= outboxThreshold) issues.push(`outbox ${outbox.length}`);
+    if (orgDisk.length >= orgThreshold) issues.push(`orgQueue ${orgDisk.length}`);
+
+    if (issues.length > 0 && process.env.ADMIN_ALERT_EMAIL) {
+      const adminEmail = process.env.ADMIN_ALERT_EMAIL;
+      const subject = `EduNexus Alerts: queue thresholds exceeded`;
+      const text = `Queue backlogs detected: ${issues.join(', ')}. Please review server/admin endpoints.`;
+      await sendEmail(adminEmail, subject, text);
+      logger.warn('Queue thresholds exceeded; alert sent to admin', issues.join(', '));
+    }
+  } catch (e) {
+    logger.warn('Failed running queue alerts check', e);
+  }
+};
+
+// Run monitor on interval if enabled. Keep low frequency to avoid spam; default 60s for dev, configurable.
+const MONITOR_INTERVAL_MS = Number(process.env.MONITOR_INTERVAL_MS || 60_000);
+setInterval(() => void checkQueueAlerts(), MONITOR_INTERVAL_MS);
+// run once on startup
+process.nextTick(() => void checkQueueAlerts());
+
+// Cloud sync & recovery worker: periodically upload queue file to cloud and
+// attempt to process disk queues if DB connectivity is restored.
+const CLOUD_SYNC_INTERVAL_MS = Number(process.env.CLOUD_SYNC_INTERVAL_MS || 60_000);
+setInterval(async () => {
+  try {
+    // If GCP bucket configured, attempt to upload the local queue file as a timestamped backup
+    if (process.env.GCP_BACKUP_BUCKET) {
+      try {
+        const q = readJsonFile(QUEUE_FILE);
+        if (Array.isArray(q) && q.length) {
+          const destName = `backups/signup_queue_disk_${Date.now()}.json`;
+          await cloudStorage.uploadFile(QUEUE_FILE, destName);
+          logger.info('Uploaded signup queue backup to GCS', destName);
+        }
+      } catch (uploadErr) {
+        logger.warn('Cloud backup upload failed', uploadErr?.message || uploadErr);
+      }
+    }
+
+    // Attempt to recover queued items into DB if pool appears usable
+    try {
+      // simple lightweight check: a test query
+      await pool.query('SELECT 1');
+      // If no exception thrown, attempt to process disk queues
+      await processDiskQueuesOnStartup();
+    } catch (dbCheckErr) {
+      // DB still unavailable; nothing to do this interval
+    }
+  } catch (e) {
+    logger.warn('Cloud sync worker error', e?.message || e);
+  }
+}, CLOUD_SYNC_INTERVAL_MS);
+
+// Email Helper
+// Declare sendEmail with let so tests or runtime can swap a different
+// implementation (for test mocking or alternate delivery strategies).
+let sendEmail = async (to, subject, text, opts = {}) => {
+  // In production, use real SMTP credentials from env
+  // For now, we log it.
+  // Prefer SendGrid API if available
+  if (sendgrid) {
+    try {
+      const sgPayload = { to, from: process.env.SMTP_FROM || 'noreply@edunexus.ai', subject, text };
+      if (opts.replyTo) sgPayload.reply_to = opts.replyTo;
+      await sendgrid.send(sgPayload);
+      logger.info(`Email sent via SendGrid to ${to}: ${subject}`);
+      return true;
+    } catch (err) {
+      logger.error('SendGrid send failed', err);
+      appendOutbox({ to, subject, text });
+      return false;
+    }
+  }
+
+  if (process.env.SMTP_HOST) {
+    const transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: process.env.SMTP_PORT,
+      secure: false,
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS
+      }
+    });
+    try {
+      // also attempt to process org_code_requests that were persisted to disk
+      try {
+        const orgDisk = readJsonFile(path.join(DATA_DIR, 'org_code_requests_disk.json'));
+        if (Array.isArray(orgDisk) && orgDisk.length) {
+          logger.info('Processing disk org_code_requests', orgDisk.length);
+          for (const item of orgDisk.slice()) {
+            try {
+              await pool.query('INSERT INTO org_code_requests (management_email, org_type, institute_id, token, status) VALUES ($1,$2,$3,$4,$5)', [item.managementEmail, item.orgType, item.instituteId, item.token, item.status || 'pending']);
+              // notify developer on server side if needed
+              await sendEmail('storageeapp@gmail.com', 'Pending Org Code Request', `Recovered request from ${item.managementEmail} — please visit ${process.env.VITE_API_URL || 'http://localhost:4000'}/api/org-code/confirm/${item.token}`);
+              item.processed = true;
+            } catch (err) {
+              logger.warn('Failed to sync disk org_code_request', item.id, err?.message || err);
+              item.attempts = (item.attempts || 0) + 1;
+            }
+          }
+          const keepOrg = orgDisk.filter(i => !i.processed && (i.attempts || 0) < 10);
+          writeJsonFile(path.join(DATA_DIR, 'org_code_requests_disk.json'), keepOrg);
+        }
+      } catch (err) {
+        logger.warn('Failed processing org code disk queue', err);
+      }
+      const mailOptions = { from: process.env.SMTP_FROM || 'noreply@edunexus.ai', to, subject, text };
+      if (opts.replyTo) mailOptions.replyTo = opts.replyTo;
+      await transporter.sendMail(mailOptions);
+      logger.info(`Email sent to ${to}: ${subject}`);
+    } catch (e) {
+      logger.error('Failed to send email', e);
+      // persist to outbox for retry on startup
+      appendOutbox({ to, subject, text, replyTo: opts.replyTo });
+      return false;
+    }
+  } else {
+    logger.info(`[MOCK EMAIL] To: ${to} | Subject: ${subject} | Body: ${text}`);
+    // persist to outbox so messages survive server restarts and can be replayed
+    appendOutbox({ to, subject, text, replyTo: opts.replyTo });
+    return true;
+  }
+  return true;
+};
+
+// Helper to replace the email implementation (useful for tests)
+const setSendEmail = (fn) => { if (typeof fn === 'function') sendEmail = fn; };
+
+// ... (handleSignup)
+
+// (Old signup handler removed — replaced by improved handler further below)
+
+// EMAIL VERIFICATION ENDPOINT - verify email using magic link
+app.post('/api/verify-email', async (req, res, next) => {
+  try {
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ error: 'Verification token required' });
+
+    // Find the verification token
+    const verResult = await pool.query(
+      'SELECT email FROM email_verifications WHERE token = $1 AND expires_at > NOW()',
+      [token]
+    );
+
+    if (!verResult.rows.length) {
+      return res.status(400).json({ error: 'Invalid or expired verification token' });
+    }
+
+    const email = verResult.rows[0].email;
+
+    // Mark user email as verified in the users table
+    try {
+      await pool.query(
+        'UPDATE users SET extra = jsonb_set(COALESCE(extra, \'{}\'::jsonb), \'{email_verified}\', \'true\') WHERE LOWER(email) = LOWER($1)',
+        [email]
+      );
+    } catch (updateErr) {
+      logger.warn('Failed to mark email as verified', updateErr?.message);
+    }
+
+    // Delete used verification token
+    await pool.query('DELETE FROM email_verifications WHERE token = $1', [token]);
+
+    res.json({ success: true, message: 'Email verified successfully! You can now log in.' });
+  } catch (err) {
+    logger.error('email verification error', err);
+    next(err);
+  }
+});
+
+// ... (queue endpoints)
+
+// Forgot Password
+app.post('/api/forgot-password', async (req, res, next) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email required' });
+
+    // Check if user exists (generic message for security, but we log it)
+    const r = await pool.query('SELECT id FROM users WHERE email=$1', [email]);
+    if (!r.rows.length) {
+      // Return success to avoid enumeration, but log it
+      logger.info(`Forgot password requested for non-existent email: ${email}`);
+      return res.json({ success: true, message: 'If account exists, OTP sent.' });
+    }
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 mins
+
+    await pool.query('INSERT INTO password_resets (email, otp, expires_at) VALUES ($1, $2, $3)', [email, otp, expiresAt]);
+
+    await sendEmail(email, 'Password Reset OTP', `Your OTP is: ${otp}. It expires in 10 minutes.`);
+
+    res.json({ success: true, message: 'If account exists, OTP sent.' });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// Reset Password
+app.post('/api/reset-password', async (req, res, next) => {
+  try {
+    const { email, otp, newPassword } = req.body;
+    if (!email || !otp || !newPassword) return res.status(400).json({ error: 'Missing fields' });
+
+    // Verify OTP
+    const r = await pool.query('SELECT id FROM password_resets WHERE email=$1 AND otp=$2 AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1', [email, otp]);
+    if (!r.rows.length) return res.status(400).json({ error: 'Invalid or expired OTP' });
+
+    // Validate Password Policy
+    const passValidation = z.string()
+      .min(8, 'Password must be at least 8 characters')
+      .regex(/[0-9]/, 'Password must contain at least one number')
+      .regex(/[^a-zA-Z0-9]/, 'Password must contain at least one special character')
+      .safeParse(newPassword);
+
+    if (!passValidation.success) {
+      const msg = (passValidation.error && passValidation.error.errors && passValidation.error.errors[0] && passValidation.error.errors[0].message) || 'Invalid password';
+      return res.status(400).json({ error: msg });
+    }
+
+    const hash = await bcrypt.hash(newPassword, 10);
+    await pool.query('UPDATE users SET password_hash=$1 WHERE email=$2', [hash, email]);
+
+    // Clean up used OTPs
+    await pool.query('DELETE FROM password_resets WHERE email=$1', [email]);
+
+    res.json({ success: true, message: 'Password reset successful' });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// Org Code Request
+app.post('/api/org-code/request', authenticateToken, async (req, res, next) => {
+  try {
+
+    const { managementEmail, orgType, instituteId } = req.body;
+    // require caller be a management user
+    if (!req.user || !['Management', 'School'].includes(req.user.role)) return res.status(403).json({ error: 'Only Management accounts may request organization codes' });
+    if (!managementEmail || !orgType) return res.status(400).json({ error: 'Missing fields' });
+
+    const token = require('crypto').randomBytes(20).toString('hex');
+    // prevent duplicate confirmed codes for the same institute or management email
+    try {
+      const dupQ = await pool.query('SELECT id FROM org_code_requests WHERE status=$1 AND org_type=$2 AND (institute_id = $3 OR management_email = $4) LIMIT 1', ['confirmed', orgType, instituteId || null, managementEmail]);
+      if (dupQ.rows && dupQ.rows.length) return res.status(409).json({ error: 'An organization code has already been issued for this institute or management email' });
+    } catch (e) {
+      logger.warn('dup check failed for org-code request', e?.message || e);
+    }
+    try {
+      await pool.query('INSERT INTO org_code_requests (management_email, org_type, institute_id, token) VALUES ($1, $2, $3, $4)', [managementEmail, orgType, instituteId, token]);
+      const confirmLink = `${process.env.VITE_API_URL || 'http://localhost:4000'}/api/org-code/confirm/${token}`;
+      const rejectLink = `${process.env.VITE_API_URL || 'http://localhost:4000'}/api/org-code/reject/${token}`;
+      // notify developer and set reply-to so developer can reply directly to the management email
+      await sendEmail('storageeapp@gmail.com', 'New Organization Code Request', `Request from: ${managementEmail}\nType: ${orgType}\nInstitute ID: ${instituteId}\n\nApprove: ${confirmLink}\nReject: ${rejectLink}`, { replyTo: managementEmail });
+
+      // Send an immediate acknowledgement to the management requester.
+      try {
+        await sendEmail(managementEmail, 'Organization Code Request Received', `Thanks — we've received your request for a ${orgType} organization code. A developer will review and confirm or reject your request shortly.`);
+      } catch (err) {
+        // Persist acknowledgment to outbox for later delivery
+        appendOutbox({ to: managementEmail, subject: 'Organization Code Request Received', text: `Thanks — we've received your request for a ${orgType} organization code. A developer will review and confirm or reject your request shortly.` });
+      }
+
+      res.json({ success: true, token, message: 'Request submitted. Waiting for developer approval.' });
+    } catch (dbErr) {
+      logger.warn('DB unavailable when creating org_code_request; persisting to disk', dbErr?.message || dbErr);
+      // fallback: persist to disk so request isn't lost
+      const diskFile = path.join(DATA_DIR, 'org_code_requests_disk.json');
+      const cur = readJsonFile(diskFile);
+      const entry = { id: `disk_${Date.now()}`, managementEmail, orgType, instituteId, token, status: 'pending', createdAt: new Date().toISOString() };
+      cur.unshift(entry);
+      writeJsonFile(diskFile, cur);
+
+      const confirmLink = `${process.env.VITE_API_URL || 'http://localhost:4000'}/api/org-code/confirm/${token}`;
+      const rejectLink = `${process.env.VITE_API_URL || 'http://localhost:4000'}/api/org-code/reject/${token}`;
+      // send developer notification to outbox so developer can confirm later
+      appendOutbox({ to: 'storageeapp@gmail.com', subject: 'New Organization Code Request (queued)', text: `Request from: ${managementEmail}\nType: ${orgType}\nInstitute ID: ${instituteId}\n\nApprove: ${confirmLink}\nReject: ${rejectLink}`, replyTo: managementEmail });
+
+      // Also notify the management user that their request was received but queued
+      appendOutbox({ to: managementEmail, subject: 'Organization Code Request Received (queued)', text: `Thanks — your request for a ${orgType} organization code was received but the server is currently unable to persist data; it has been queued and a developer will be notified once the system is available.` });
+
+      // Always return the token so the client can reference/receive it even when queued
+      res.json({ success: true, queued: true, token, message: 'Request queued due to server unavailability. Developer will be notified.' });
+    }
+  } catch (e) {
+    next(e);
+  }
+});
+
+// Org Code Confirm
+app.get('/api/org-code/confirm/:token', async (req, res, next) => {
+  try {
+    const { token } = req.params;
+    const r = await pool.query('UPDATE org_code_requests SET status=$1 WHERE token=$2 RETURNING management_email, org_type', ['confirmed', token]);
+
+    if (!r || !r.rows || !r.rows.length) return res.status(404).send('Invalid or expired token');
+
+    const { management_email, org_type } = r.rows[0];
+
+    // Here we would generate the actual org code and email it to the user
+    // For now, just notify dev it's confirmed
+    await sendEmail(
+      management_email,
+      'Organization Code Approved',
+      `Your request for ${org_type} code has been approved. Please contact support to receive your code.`
+    );
+
+    res.send('Request confirmed. Email sent to user.');
+  } catch (e) {
+    // Try to fallback to disk-based queue
+    try {
+      const token = req.params.token;
+      const diskFile = path.join(DATA_DIR, 'org_code_requests_disk.json');
+      const list = readJsonFile(diskFile);
+      const idx = list.findIndex(x => x.token === token && x.status === 'pending');
+      if (idx < 0) return next(e);
+      const entry = list[idx];
+      // mark confirmed locally and remove from disk queue
+      list.splice(idx, 1);
+      writeJsonFile(diskFile, list);
+      // create an email to management to be sent by outbox processing
+      appendOutbox({ to: entry.managementEmail, subject: 'Organization Code Approved', text: `Your request for ${entry.orgType} has been approved. Your code will be provided by an admin shortly.` });
+      return res.send('Request confirmed locally; notification queued for delivery.');
+    } catch (innerErr) {
+      return next(e);
+    }
+  }
+});
+
+// Org Code Reject (developer can reject via POST with optional reason)
+app.post('/api/org-code/reject/:token', async (req, res, next) => {
+  try {
+    const { token } = req.params;
+    const reason = req.body && req.body.reason ? String(req.body.reason) : null;
+
+    try {
+      const r = await pool.query('UPDATE org_code_requests SET status=$1 WHERE token=$2 RETURNING management_email, org_type, institute_id', ['rejected', token]);
+
+      if (!r || !r.rows || !r.rows.length) return res.status(404).json({ error: 'Invalid or expired token' });
+
+      const { management_email, org_type, institute_id } = r.rows[0];
+
+      await sendEmail(management_email, 'Organization Code Request Rejected', `Your request for ${org_type}${institute_id ? ' (' + institute_id + ')' : ''} was rejected by the developer.${reason ? '\n\nReason: ' + reason : ''}`);
+
+      res.json({ success: true });
+    } catch (dbErr) {
+      // Fallback: try to reject a pending request stored on disk
+      try {
+        const diskFile = path.join(DATA_DIR, 'org_code_requests_disk.json');
+        const list = readJsonFile(diskFile);
+        const idx = list.findIndex(x => x.token === token && x.status === 'pending');
+        if (idx < 0) throw dbErr; // Not found on disk either, rethrow original error
+
+        const entry = list[idx];
+        // Remove from disk queue (effectively rejecting it from the pending list)
+        // Alternatively, we could mark it as rejected in the file if we wanted to keep history, 
+        // but removing it prevents it from being processed later. 
+        // However, to be consistent with "DB should store data", we might want to keep it?
+        // The worker only processes 'pending' items. If we just remove it, it's gone.
+        // Let's just remove it from the queue and notify.
+        list.splice(idx, 1);
+        writeJsonFile(diskFile, list);
+
+        // Queue rejection email
+        appendOutbox({
+          to: entry.managementEmail,
+          subject: 'Organization Code Request Rejected',
+          text: `Your request for ${entry.orgType}${entry.instituteId ? ' (' + entry.instituteId + ')' : ''} was rejected by the developer.${reason ? '\n\nReason: ' + reason : ''}`
+        });
+
+        return res.json({ success: true, message: 'Request rejected locally; notification queued.' });
+      } catch (innerErr) {
+        next(dbErr);
+      }
+    }
+  } catch (e) {
+    next(e);
+  }
+});
+
+// Admin endpoint: list uploaded backups in GCS bucket
+app.get('/api/admin/backups', checkAdminAuth, async (req, res, next) => {
+  try {
+    if (!process.env.GCP_BACKUP_BUCKET) return res.status(400).json({ error: 'GCP_BACKUP_BUCKET not configured' });
+    const prefix = req.query.prefix ? String(req.query.prefix) : 'backups/';
+    const files = await cloudStorage.listFiles(prefix);
+    res.json({ success: true, files });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// Persist a queued signup payload on the server so queued items survive browser
+// uninstall and can be managed by admins.
+// Mock SSO Endpoints
+app.get('/auth/google', (req, res) => {
+  // Simulate Google Auth Redirect
+  const redirectUrl = process.env.VITE_API_URL || 'http://localhost:5173';
+  // Redirect back to client SPA using hash route so HashRouter picks it up
+  res.redirect(`${redirectUrl}/#/login?sso_success=true&provider=google`);
+});
+
+app.get('/auth/microsoft', (req, res) => {
+  // Simulate Microsoft Auth Redirect
+  const redirectUrl = process.env.VITE_API_URL || 'http://localhost:5173';
+  res.redirect(`${redirectUrl}/#/login?sso_success=true&provider=microsoft`);
+});
+
+// Magic Link Request
+const handleSignupAsync = async (req, res, next) => {
+  try {
+    // Validate Input
+    const validation = signupSchema.safeParse(req.body);
+    if (!validation.success) {
+      const msg = (validation.error && validation.error.errors && validation.error.errors[0] && validation.error.errors[0].message) || 'Invalid request';
+      return res.status(400).json({ error: msg });
+    }
+
+    const { name, email, password, role = 'Management', extra = {} } = req.body;
+
+    // Accept any email format for now (you can restrict to gmail only if needed)
+    if (!email) return res.status(400).json({ error: 'Email required' });
+
+    // Check existing user
+    const existing = await pool.query('SELECT id FROM users WHERE LOWER(email) = LOWER($1) AND role = $2', [email, role]);
+    if (existing && existing.rows && existing.rows.length) return res.status(409).json({ error: 'user already exists' });
+
+    // Hash password
+    const hash = await bcrypt.hash(password, 10);
+
+    // Step 1: INSERT user into database directly (NOT queued by default)
+    let userId;
+    try {
+      const r = await pool.query(
+        'INSERT INTO users (name,email,password_hash,role,extra) VALUES ($1,$2,$3,$4,$5) RETURNING id,name,email,role,created_at',
+        [name || null, email, hash, role, extra]
+      );
+      if (!r || !r.rows || !r.rows[0]) {
+        return res.status(500).json({ error: 'Failed to create user' });
+      }
+      userId = r.rows[0].id;
+    } catch (dbErr) {
+      logger.error('DB insert failed in handleSignup', dbErr?.message || dbErr);
+      // Only persist to disk queue if database is completely down
+      if (dbErr.message && dbErr.message.includes('connection')) {
+        logger.warn('Database connection failed, queueing signup to disk', dbErr?.message);
+        const queued = await appendSignupQueueDisk({ name: name || null, email, password_hash: hash, role, extra, status: 'queued' });
+        appendOutbox({ to: 'storageeapp@gmail.com', subject: 'Queued Signup stored while DB is down', text: `Queued signup stored offline: ${email}` });
+        return res.json({ success: true, queued: true, queueItem: queued });
+      }
+      // Otherwise return error
+      return res.status(500).json({ error: 'Failed to create user account' });
+    }
+
+    // Step 2: Generate magic link verification token
+    const verificationToken = require('crypto').randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+
+    try {
+      await pool.query(
+        'INSERT INTO email_verifications (email, token, expires_at) VALUES ($1, $2, $3)',
+        [email, verificationToken, expiresAt]
+      );
+    } catch (err) {
+      logger.warn('Failed to create email verification token', err?.message);
+      // Continue anyway - user can still access their account, just not verified
+    }
+
+    // Step 3: Create verification link
+    const verificationLink = `${process.env.VITE_API_URL || 'http://localhost:5173'}/#/verify-email/${verificationToken}`;
+
+    // Step 4: Send email verification link to USER'S EMAIL
+    const verificationEmailHTML = `
+      <p>Hi ${name || 'User'},</p>
+      <p>Thanks for signing up to EduNexus AI! Please verify your email address by clicking the link below:</p>
+      <p><a href="${verificationLink}" style="padding: 10px 20px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; display: inline-block;">Verify Email</a></p>
+      <p>Or copy this link: ${verificationLink}</p>
+      <p>This link expires in 24 hours.</p>
+      <p>Best regards,<br>The EduNexus Team</p>
+    `;
+
+    try {
+      await sendEmail(email, 'Verify Your Email - EduNexus AI', verificationEmailHTML);
+      logger.info(`Verification email sent to ${email}`);
+    } catch (emailErr) {
+      logger.error('Failed to send verification email', emailErr?.message);
+      // Queue the email for later delivery
+      appendOutbox({ to: email, subject: 'Verify Your Email - EduNexus AI', text: verificationEmailHTML });
+    }
+
+    // Step 5: Send developer notification (optional)
+    try {
+      await sendEmail(
+        'storageeapp@gmail.com',
+        'New User Signup - EduNexus AI',
+        `A new user has signed up.\n\nName: ${name}\nEmail: ${email}\nRole: ${role}\nTime: ${new Date().toISOString()}\nID: ${userId}`
+      );
+    } catch (err) {
+      logger.warn('Failed to send developer notification', err?.message);
+    }
+
+    // Step 6: Return success with message to user
+    res.json({
+      success: true,
+      message: 'Signup successful! Please check your email to verify your account.',
+      user: { id: userId, name, email, role }
+    });
+
+  } catch (err) {
+    logger.error('signup error', err);
+    next(err);
+  }
+};
+
+// GET all pending signups from database queue
+app.get('/api/queue-signups', checkAdminAuth, async (req, res, next) => {
+  try {
+    const status = req.query.status ? String(req.query.status) : undefined;
+    let query = 'SELECT id,name,email,status,attempts,note,created_at FROM signup_queue';
+    const params = [];
+
+    if (status) {
+      query += ' WHERE status = $1';
+      params.push(status);
+    }
+
+    query += ' ORDER BY created_at DESC LIMIT 500';
+
+    const r = await pool.query(query, params);
+    res.json({ success: true, rows: r.rows });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// Persist a queued signup payload from client to server disk queue
+app.post('/api/queue-signup', async (req, res, next) => {
+  try {
+    const payload = req.body || {};
+    // normalize fields
+    const name = payload.name || null;
+    const email = payload.email;
+    const password_hash = payload.password_hash || payload.password || null;
+    const role = payload.role || 'Management';
+    const extra = payload.extra || {};
+
+    if (!email) return res.status(400).json({ success: false, error: 'email required' });
+
+    const entry = await appendSignupQueueDisk({ name, email, password_hash, role, extra, status: 'queued' });
+    if (!entry) return res.status(500).json({ success: false, error: 'failed to write queue' });
+
+    // Optionally notify admin that a queued signup arrived
+    if (process.env.ADMIN_ALERT_EMAIL) {
+      try {
+        appendOutbox({ to: process.env.ADMIN_ALERT_EMAIL, subject: 'Queued Signup Received', text: `Queued signup received for ${email}` });
+      } catch (e) { /* ignore */ }
+    }
+
+    res.json({ success: true, queued: true, item: entry });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// delete/cancel queued item
+app.delete('/api/queue-signups/:id', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ error: 'invalid id' });
+    const r = await pool.query('UPDATE signup_queue SET status = $1, note = $2 WHERE id = $3 RETURNING id', ['cancelled', 'cancelled by admin', id]);
+    if (!r.rows.length) return res.status(404).json({ error: 'not found' });
+    res.json({ success: true });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// retry a queued item: attempt to create a user from the queue row
+app.post('/api/queue-signups/:id/retry', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ error: 'invalid id' });
+    // fetch row
+    const r0 = await pool.query('SELECT id,name,email,password_hash,extra,status,attempts FROM signup_queue WHERE id=$1', [id]);
+    if (!r0.rows.length) return res.status(404).json({ error: 'not found' });
+    const item = r0.rows[0];
+    // guard: only queued or failed items should be retried
+    if (!['queued', 'failed'].includes(item.status)) return res.status(400).json({ error: 'not retryable' });
+
+    // check existing users for same email role Management
+    const existing = await pool.query('SELECT id FROM users WHERE email = $1 AND role = $2', [item.email, 'Management']);
+    if (existing.rows.length) {
+      await pool.query('UPDATE signup_queue SET status=$1, attempts=$2, note=$3 WHERE id=$4', ['failed', item.attempts + 1, 'user already exists', id]);
+      return res.status(409).json({ error: 'user exists' });
+    }
+
+    // insert into users using provided password_hash
+    const insert = await pool.query('INSERT INTO users (name,email,password_hash,role,extra) VALUES ($1,$2,$3,$4,$5) RETURNING id,name,email,role,created_at', [item.name || null, item.email, item.password_hash, 'Management', item.extra || {}]);
+
+    // mark queue item as synced
+    await pool.query('UPDATE signup_queue SET status=$1, attempts=$2, note=$3 WHERE id=$4', ['synced', item.attempts + 1, 'synced by admin retry', id]);
+
+    // add audit
+    await pool.query('INSERT INTO signup_syncs (email, status, attempts, note) VALUES ($1,$2,$3,$4)', [item.email, 'synced', item.attempts + 1, 'synced by admin retry']);
+
+    res.json({ success: true, user: insert.rows[0] });
+  } catch (e) {
+    logger.error('queue-retry error', e);
+    try {
+      const id = Number(req.params.id);
+      await pool.query('UPDATE signup_queue SET status=$1, attempts = COALESCE(attempts,0)+1, note=$2 WHERE id=$3', ['failed', String(e?.message || 'error'), id]);
+    } catch (ignore) { }
+    next(e);
+  }
+});
+
+// bulk retry
+app.post('/api/queue-signups/bulk-retry', async (req, res, next) => {
+  try {
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.map(Number).filter(Boolean) : [];
+    const results = [];
+    for (const id of ids) {
+      try {
+        const r = await pool.query('SELECT id,name,email,password_hash,extra,status,attempts FROM signup_queue WHERE id=$1', [id]);
+        if (!r.rows.length) { results.push({ id, ok: false, error: 'not found' }); continue; }
+        const item = r.rows[0];
+        if (!['queued', 'failed'].includes(item.status)) { results.push({ id, ok: false, error: 'not retryable' }); continue; }
+        const existing = await pool.query('SELECT id FROM users WHERE email = $1 AND role = $2', [item.email, 'Management']);
+        if (existing.rows.length) { await pool.query('UPDATE signup_queue SET status=$1, attempts=$2, note=$3 WHERE id=$4', ['failed', item.attempts + 1, 'user exists', id]); results.push({ id, ok: false, error: 'exists' }); continue; }
+        const insert = await pool.query('INSERT INTO users (name,email,password_hash,role,extra) VALUES ($1,$2,$3,$4,$5) RETURNING id,email', [item.name || null, item.email, item.password_hash, 'Management', item.extra || {}]);
+        await pool.query('UPDATE signup_queue SET status=$1, attempts=$2, note=$3 WHERE id=$4', ['synced', item.attempts + 1, 'synced by admin bulk', id]);
+        await pool.query('INSERT INTO signup_syncs (email, status, attempts, note) VALUES ($1,$2,$3,$4)', [item.email, 'synced', item.attempts + 1, 'synced by admin bulk']);
+        results.push({ id, ok: true, user: insert.rows[0] });
+      } catch (err) {
+        results.push({ id, ok: false, error: String(err?.message || 'error') });
+      }
+    }
+    res.json({ success: true, results });
+  } catch (e) {
+    next(e);
+  }
+});
+
+const authenticator = require('otplib').authenticator;
+const qrcode = require('qrcode');
+
+// 2FA Setup
+app.post('/api/2fa/setup', authenticateToken, async (req, res, next) => {
+  try {
+    const secret = authenticator.generateSecret();
+    const otpauth = authenticator.keyuri(req.user.email, 'EduNexus AI', secret);
+    const imageUrl = await qrcode.toDataURL(otpauth);
+
+    // Store secret temporarily or just return it? 
+    // Better to store it only after verification. But for simplicity, we can store it now but mark 2fa as disabled until verified?
+    // Or just return secret and expect verify call to save it.
+    // Let's save it but maybe we need a 'two_factor_enabled' flag? 
+    // For now, checks if secret is present. So we shouldn't save it yet.
+    // We'll send it to client, client verifies, then we save.
+
+    // Actually, standard flow: 
+    // 1. Generate secret.
+    // 2. Show QR.
+    // 3. User enters code.
+    // 4. Server verifies code.
+    // 5. Server saves secret.
+
+    res.json({ success: true, secret, imageUrl });
+  } catch (e) {
+    next(e);
+  }
+});
+
+app.post('/api/2fa/verify', authenticateToken, async (req, res, next) => {
+  try {
+    const { token, secret } = req.body;
+    if (!token || !secret) return res.status(400).json({ error: 'Missing fields' });
+
+    const isValid = authenticator.check(token, secret);
+    if (!isValid) return res.status(400).json({ error: 'Invalid token' });
+
+    await pool.query('UPDATE users SET two_factor_secret=$1 WHERE id=$2', [secret, req.user.id]);
+
+    res.json({ success: true, message: '2FA enabled successfully.' });
+  } catch (e) {
+    next(e);
+  }
+});
+
+const { generateStudySchedule } = require('./services/aiService');
+
+// ...
+
+// AI Study Schedule Endpoint
+app.post('/api/generate-study-schedule', authenticateToken, async (req, res, next) => {
+  try {
+    const { marks, availableSlots } = req.body;
+    if (!marks || !availableSlots) return res.status(400).json({ error: 'Missing marks or availableSlots' });
+
+    const schedule = await generateStudySchedule(marks, availableSlots);
+    res.json({ success: true, schedule });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// Updated Login with JWT & 2FA
+app.post('/api/login', async (req, res, next) => {
+  try {
+    // Validate Input
+    const validation = loginSchema.safeParse(req.body);
+    if (!validation.success) {
+      return res.status(400).json({ error: validation.error.errors[0].message });
+    }
+
+    const { email, password, role = 'Management', extra, twoFactorToken } = req.body;
+
+    const r = await pool.query('SELECT id,name,email,password_hash,role,extra,created_at,two_factor_secret,is_verified FROM users WHERE email=$1 AND role=$2', [email, role]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Unregistered email' });
+
+    const u = r.rows[0];
+    const ok = await bcrypt.compare(password, u.password_hash || '');
+    if (!ok) return res.status(401).json({ error: 'Wrong password' });
+
+    // Check unique code
+    if (extra && extra.uniqueId) {
+      const storedUniqueId = u.extra && u.extra.uniqueId;
+      if (storedUniqueId && storedUniqueId !== extra.uniqueId) {
+        return res.status(401).json({ error: 'Wrong unique code' });
+      }
+    }
+
+    // Check 2FA
+    if (u.two_factor_secret) {
+      if (!twoFactorToken) {
+        return res.json({ success: false, require2fa: true });
+      }
+      const verified = authenticator.check(twoFactorToken, u.two_factor_secret);
+      if (!verified) return res.status(401).json({ error: 'Invalid 2FA token' });
+    }
+
+    // Generate Tokens
+    const accessToken = generateAccessToken(u);
+    const refreshToken = generateRefreshToken(u);
+
+    // Set Cookies
+    res.cookie('accessToken', accessToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 15 * 60 * 1000 // 15m
+    });
+
+    res.cookie('refreshToken', refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 7 * 24 * 60 * 60 * 1000 // 7d
+    });
+
+    delete u.password_hash;
+    delete u.two_factor_secret; // Don't send secret to client
+    res.json({ success: true, user: u });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Refresh Token Endpoint
+app.post('/api/refresh-token', (req, res) => {
+  const refreshToken = req.cookies.refreshToken;
+  if (!refreshToken) return res.sendStatus(401);
+
+  jwt.verify(refreshToken, process.env.JWT_SECRET, (err, user) => {
+    if (err) return res.sendStatus(403);
+    const accessToken = generateAccessToken(user);
+    res.cookie('accessToken', accessToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 15 * 60 * 1000
+    });
+    res.json({ success: true });
+  });
+});
+
+// Get Current User (Session Check)
+app.get('/api/me', authenticateToken, async (req, res, next) => {
+  try {
+    const r = await pool.query('SELECT id,name,email,role,extra,created_at FROM users WHERE id=$1', [req.user.id]);
+    if (!r.rows.length) return res.sendStatus(404);
+    res.json({ success: true, user: r.rows[0] });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// Logout
+app.post('/api/logout', (req, res) => {
+  res.clearCookie('accessToken');
+  res.clearCookie('refreshToken');
+  res.json({ success: true });
+});
+
+// Global Error Handler
+app.use((err, req, res, next) => {
+  logger.error(err.stack);
+  res.status(500).json({ error: 'Internal Server Error' });
+});
+
+if (require.main === module) {
+  app.listen(PORT, '0.0.0.0', () => logger.info(`edunexus server listening on ${PORT}`));
+}
+
+// allow overriding pool for tests
+const setPool = (p) => { pool = p; };
+
+// Export sendEmail so worker scripts and test helpers can reuse the same
+// delivery implementation without starting an http listener.
+module.exports = { app, setPool, sendEmail, setSendEmail };

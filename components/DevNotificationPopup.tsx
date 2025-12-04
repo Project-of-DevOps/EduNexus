@@ -2,15 +2,19 @@ import React from 'react';
 import Modal from './ui/Modal';
 import Button from './ui/Button';
 import { useData } from '../context/DataContext';
+import { useAuth } from '../context/AuthContext';
 
 const DEV_EMAIL = 'storageeapp@gmail.com';
 
 const DevNotificationPopup: React.FC = () => {
-  const { getNotificationsForEmail, confirmOrgCodeRequest, markNotificationRead } = useData();
+  const { user } = useAuth();
+  const { getNotificationsForEmail, confirmOrgCodeRequest, markNotificationRead, notifications } = useData();
   const [visible, setVisible] = React.useState(false);
   const [current, setCurrent] = React.useState<any | null>(null);
 
   React.useEffect(() => {
+    if (!user) return; // Don't check notifications if not logged in
+    if (user.email !== DEV_EMAIL) return; // Only show to developer
     const notes = getNotificationsForEmail(DEV_EMAIL).filter(n => !n.read && (n.type === 'org' || n.type === 'code:request' || n.type === 'code:confirmed'));
     if (notes.length === 0) return;
     // find the latest code:request (or the first pending)
@@ -20,9 +24,9 @@ const DevNotificationPopup: React.FC = () => {
       setCurrent(pending);
       setVisible(true);
     }
-  }, [getNotificationsForEmail]);
+  }, [getNotificationsForEmail, notifications, user]);
 
-  if (!current) return null;
+  if (!current || !user || user.email !== DEV_EMAIL) return null;
 
   return (
     <Modal isOpen={visible} onClose={() => { setVisible(false); if (current) markNotificationRead(current.id); }} className="w-[700px] h-[500px] flex flex-col">
@@ -34,8 +38,8 @@ const DevNotificationPopup: React.FC = () => {
         <div className="flex justify-end gap-2 mt-auto">
           <Button variant="secondary" onClick={() => { setVisible(false); markNotificationRead(current.id); }}>Dismiss</Button>
           {current.meta?.token && (
-            <Button onClick={() => {
-              const res = confirmOrgCodeRequest(current.meta.token);
+            <Button onClick={async () => {
+              const res = await confirmOrgCodeRequest(current.meta.token);
               // close popup after attempting confirmation
               setVisible(false);
               if (res && (res as any).success) {

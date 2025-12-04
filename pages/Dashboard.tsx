@@ -1,10 +1,7 @@
-
 import React from 'react';
+import { Navigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { UserRole } from '../types';
-import TeacherDashboard from '../components/teacher/TeacherDashboard';
-import StudentDashboard from '../components/student/StudentDashboard';
-import ParentDashboard from '../components/parent/ParentDashboard';
 
 const Dashboard: React.FC = () => {
   const { user } = useAuth();
@@ -16,13 +13,17 @@ const Dashboard: React.FC = () => {
   switch (user.role) {
     case UserRole.Teacher:
     case UserRole.Dean:
-      return <TeacherDashboard />;
+      return <Navigate to="/dashboard/teacher" replace />;
     case UserRole.Student:
-      return <StudentDashboard />;
+      return <Navigate to="/dashboard/student" replace />;
     case UserRole.Parent:
-      return <ParentDashboard />;
+      return <Navigate to="/dashboard/parent" replace />;
+    case UserRole.Management:
+      return <Navigate to="/dashboard/management" replace />;
+    case UserRole.Librarian:
+      return <Navigate to="/dashboard/librarian" replace />;
     default:
-      return <div>Unknown user role.</div>;
+      return <div>Unknown user role: {(user as any).role}</div>;
   }
 };
 

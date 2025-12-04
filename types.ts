@@ -3,6 +3,7 @@ export enum UserRole {
   Teacher = 'teacher',
   Student = 'student',
   Parent = 'parent',
+  Librarian = 'librarian',
 
   Dean = 'dean',
   Management = 'management'
@@ -95,7 +96,12 @@ export interface Management extends User {
   type: 'school' | 'institute';
 }
 
-export type LoggedInUser = Student | Teacher | Parent | Dean | Management;
+export interface Librarian extends User {
+  role: UserRole.Librarian;
+  instituteId: string;
+}
+
+export type LoggedInUser = Student | Teacher | Parent | Dean | Management | Librarian;
 
 export interface Class {
   id: string;
@@ -103,6 +109,7 @@ export interface Class {
   teacherIds: string[];
   studentIds: string[];
   departmentId: string;
+  instituteId?: string;
 }
 
 export interface AttendanceRecord {
@@ -162,4 +169,74 @@ export interface StudentTask {
   studentId: string;
   status: 'To Do' | 'In Progress' | 'Completed';
   completedDate?: string; // ISO 8601
+}
+
+// Library related types
+export interface Book {
+  id: string;
+  title: string;
+  author?: string;
+  isbn?: string;
+  publisher?: string;
+  category?: string;
+  totalCopies?: number;
+  availableCopies?: number;
+  description?: string;
+  tags?: string[];
+  createdAt?: string;
+}
+
+export interface BorrowRecord {
+  id: string;
+  bookId: string;
+  bookTitle: string;
+  borrowerId?: string; // student's id
+  borrowerName?: string;
+  borrowedAt?: string; // ISO timestamp
+  dueAt?: string; // ISO timestamp
+  returnedAt?: string | null;
+  status: 'borrowed' | 'returned' | 'overdue' | 'reserved';
+}
+
+export interface BookRequest {
+  id: string;
+  requesterId?: string;
+  requesterName?: string;
+  bookTitle: string;
+  reason?: string;
+  priority?: 'low' | 'medium' | 'high';
+  status: 'pending' | 'fulfilled' | 'cancelled';
+  createdAt?: string;
+}
+
+export interface Reservation {
+  id: string;
+  bookId: string;
+  bookTitle?: string;
+  requesterId?: string;
+  requesterName?: string;
+  reservedAt?: string; // ISO timestamp
+  expiresAt?: string | null; // ISO timestamp the reservation expires (optional)
+  status: 'active' | 'cancelled' | 'notified' | 'fulfilled';
+}
+
+export interface AuditLog {
+  id: string;
+  action: string; // e.g., 'mark_lost', 'mark_damaged', 'create_book', 'delete_book'
+  actorId?: string; // who performed the action
+  actorName?: string;
+  timestamp: string;
+  target?: string; // e.g., book id or user id
+  note?: string;
+  meta?: Record<string, any>;
+}
+
+export interface DamageReport {
+  id: string;
+  bookId: string;
+  reporterId?: string;
+  reporterName?: string;
+  reportedAt: string;
+  status: 'reported' | 'resolved' | 'replaced';
+  note?: string;
 }

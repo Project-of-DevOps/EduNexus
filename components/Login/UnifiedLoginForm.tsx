@@ -1,0 +1,908 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate, Link } from 'react-router-dom';
+import { useAuth } from '../../hooks/useAuth';
+import { useData } from '../../context/DataContext';
+import { UserRole, TeachingAssignment } from '../../types';
+import Button from '../ui/Button';
+import Input from '../ui/Input';
+import Card from '../ui/Card';
+import OTPModal from '../auth/OTPModal';
+
+const roles = [
+    { id: UserRole.Management, label: 'Management' },
+    { id: UserRole.Teacher, label: 'Teacher' },
+    { id: UserRole.Student, label: 'Student' },
+    { id: UserRole.Parent, label: 'Parent' },
+    { id: UserRole.Librarian, label: 'Librarian' },
+];
+
+const managementRoles = ['Chairman', 'Director', 'Principal', 'Vice Principal', 'Dean'];
+const teachingRoles = [
+    'Professor', 'Associate Professor', 'Assistant Professor', 'Lecturer',
+    'Senior Teacher', 'Subject Teacher', 'HOD',
+    'Class Teacher', 'Class Teacher (Advisor)'
+];
+const classTeacherRoles = ['Class Teacher', 'Class Teacher (Advisor)'];
+const departments = ['CSE', 'ECE', 'Mechanical', 'Science', 'Mathematics', 'Accounts', 'English', 'Social Studies'];
+
+type Prefill = { email?: string; uniqueId?: string; orgType?: 'school' | 'institute' };
+
+const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> = ({ defaultRole, prefill }) => {
+    const navigate = useNavigate();
+    const { login, signUp, signUpAsGuest } = useAuth();
+    const { submitOrgJoinRequest, verifyTeacherCode, consumeTeacherCode } = useData();
+
+    const [activeRole, setActiveRole] = useState<UserRole>(defaultRole || UserRole.Management);
+    const [isLogin, setIsLogin] = useState(true);
+    const [isOffline, setIsOffline] = useState(!navigator.onLine);
+
+    // Form State
+    const [email, setEmail] = useState(prefill?.email || '');
+    const [password, setPassword] = useState('');
+    const [uniqueId, setUniqueId] = useState(prefill?.uniqueId || ''); // For Management/Student/Teacher/Parent
+    const [orgType, setOrgType] = useState<'school' | 'institute'>(prefill?.orgType || 'school'); // For Management/Student/Teacher/Parent
+    const [name, setName] = useState(''); // For Signup
+    const [instituteName, setInstituteName] = useState(''); // For Signup
+    const [accessCode, setAccessCode] = useState(''); // For Student/Parent Signup
+    const [rememberMe, setRememberMe] = useState(false);
+
+    // Email First Logic
+    const [emailSubmitted, setEmailSubmitted] = useState(false);
+
+    // Teacher Specific State
+    const [teacherTitle, setTeacherTitle] = useState('');
+    const [department, setDepartment] = useState('');
+    const [currentSubject, setCurrentSubject] = useState('');
+    const [currentClass, setCurrentClass] = useState('');
+    const [teachingAssignments, setTeachingAssignments] = useState<TeachingAssignment[]>([]);
+    const [classInChargeId, setClassInChargeId] = useState('');
+
+    const [error, setError] = useState('');
+    const [successMessage, setSuccessMessage] = useState('');
+    const [loading, setLoading] = useState(false);
+    const [showPassword, setShowPassword] = useState(false);
+
+    const [showOTPModal, setShowOTPModal] = useState(false);
+    const [twoFactorToken, setTwoFactorToken] = useState<string | null>(null);
+    const [showForgotPassword, setShowForgotPassword] = useState(false);
+
+    // Inline Validation State
+    const [emailError, setEmailError] = useState('');
+    const [passwordError, setPasswordError] = useState('');
+
+    useEffect(() => {
+        const handleOnline = () => setIsOffline(false);
+        const handleOffline = () => setIsOffline(true);
+        window.addEventListener('online', handleOnline);
+        window.addEventListener('offline', handleOffline);
+
+        // Check for SSO errors or success. Support both querystring and hash-style routes.
+        const getQueryParams = () => {
+            // If search is present use it. Otherwise, check for query after hash (#/path?query)
+            if (window.location.search && window.location.search.length > 1) return new URLSearchParams(window.location.search);
+            const hash = window.location.hash || '';
+            const idx = hash.indexOf('?');
+            if (idx >= 0) {
+                const qs = hash.slice(idx + 1);
+                return new URLSearchParams(qs);
+            }
+            return new URLSearchParams('');
+        };
+
+        const params = getQueryParams();
+        const ssoError = params.get('error');
+        if (ssoError) setError(`SSO Error: ${ssoError}`);
+        const ssoSuccess = params.get('sso_success');
+        if (ssoSuccess) {
+            setSuccessMessage('SSO Login Successful! Redirecting...');
+            setTimeout(() => navigateDashboard(), 1500);
+        }
+
+        return () => {
+            window.removeEventListener('online', handleOnline);
+            window.removeEventListener('offline', handleOffline);
+        };
+    }, []);
+
+    // Apply prefill/defaultRole only once on mount (do not override user edits)
+    useEffect(() => {
+        if (defaultRole) setActiveRole(defaultRole);
+        if (prefill) {
+            if (prefill.email) setEmail(prefill.email);
+            if (prefill.uniqueId) setUniqueId(prefill.uniqueId);
+            if (prefill.orgType) setOrgType(prefill.orgType);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    const isManagementRole = (role: string) => managementRoles.includes(role);
+    const isTeachingRole = (role: string) => teachingRoles.includes(role);
+    const isClassTeacher = (role: string) => classTeacherRoles.includes(role);
+
+    const validateEmail = (val: string) => {
+        if (!val.trim()) return 'Email is required.';
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)) return 'Please enter a valid email address.';
+        return '';
+    };
+
+    const validatePassword = (val: string) => {
+        if (!val.trim()) return 'Password is required.';
+        if (!isLogin && val.length < 6) return 'Password must be at least 6 characters.';
+        return '';
+    };
+
+    const handleEmailBlur = () => {
+        setEmailError(validateEmail(email));
+    };
+
+    const handlePasswordBlur = () => {
+        setPasswordError(validatePassword(password));
+    };
+
+    const handleEmailSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        console.log('Submitting email:', email);
+        const err = validateEmail(email);
+        if (err) {
+            console.log('Email error:', err);
+            setEmailError(err);
+            return;
+        }
+        setEmailError('');
+        setEmailSubmitted(true);
+        console.log('Email submitted set to true');
+    };
+
+    const handleResetFlow = () => {
+        setEmailSubmitted(false);
+        setPassword('');
+        setError('');
+        setSuccessMessage('');
+        setShowForgotPassword(false);
+    };
+
+    const handleForgotPasswordSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!email.trim()) {
+            setError('Please enter your email address.');
+            return;
+        }
+        setLoading(true);
+        setError('');
+        setSuccessMessage('');
+
+        try {
+            // Mock API call for password reset
+            await new Promise(resolve => setTimeout(resolve, 1500));
+            setSuccessMessage(`Password reset link sent to ${email}`);
+            setTimeout(() => {
+                setShowForgotPassword(false);
+                setSuccessMessage('');
+            }, 3000);
+        } catch (err) {
+            setError('Failed to send reset link. Please try again.');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const validate = () => {
+        const eErr = validateEmail(email);
+        if (eErr) return eErr;
+        const pErr = validatePassword(password);
+        if (pErr) return pErr;
+
+        // Unique ID required for Login (except Librarian) and Signup (except Librarian/StudentWithCode/ParentWithCode)
+        const needsUniqueId = activeRole !== UserRole.Librarian;
+        if (needsUniqueId && !uniqueId.trim() && isLogin) {
+            return 'Unique ID is required.';
+        }
+        if (needsUniqueId && !uniqueId.trim() && !isLogin && !accessCode.trim()) {
+            return 'Unique ID is required.';
+        }
+
+        if (!isLogin && !name.trim()) return 'Full Name is required.';
+
+        // Teacher Validation
+        if (!isLogin && activeRole === UserRole.Teacher) {
+            if (!teacherTitle) return 'Role is required.';
+            if (isTeachingRole(teacherTitle)) {
+                if (!department) return 'Department is required.';
+                if (teachingAssignments.length === 0) return 'At least one teaching assignment is required.';
+            }
+            if (isClassTeacher(teacherTitle) && !classInChargeId) {
+                return 'Class ID is required.';
+            }
+        }
+
+        return null;
+    };
+
+    const handleAddAssignment = () => {
+        if (currentSubject.trim() && currentClass.trim()) {
+            setTeachingAssignments([...teachingAssignments, { subject: currentSubject.trim(), classId: currentClass.trim() }]);
+            setCurrentSubject('');
+            setCurrentClass('');
+        }
+    };
+
+    const removeAssignment = (index: number) => {
+        const newAssignments = [...teachingAssignments];
+        newAssignments.splice(index, 1);
+        setTeachingAssignments(newAssignments);
+    };
+
+    const handleVerifyOTP = async (otp: string) => {
+        try {
+            const extras: any = {};
+            if (activeRole !== UserRole.Librarian) {
+                extras.uniqueId = uniqueId;
+                extras.orgType = orgType;
+            }
+            extras.twoFactorToken = otp; // Pass OTP as token
+
+            const result = await login(email, password, activeRole, extras);
+            if (result.success) {
+                setShowOTPModal(false);
+                if (rememberMe) {
+                    localStorage.setItem('edunexus:remember_me', 'true');
+                } else {
+                    localStorage.removeItem('edunexus:remember_me');
+                }
+                navigateDashboard();
+            } else {
+                throw new Error(result.error || 'Invalid OTP');
+            }
+        } catch (err: any) {
+            throw new Error(err.message || 'Verification failed');
+        }
+    };
+
+    const navigateDashboard = () => {
+        if (activeRole === UserRole.Management) navigate('/dashboard/management');
+        else if (activeRole === UserRole.Librarian) navigate('/dashboard/librarian');
+        else if (activeRole === UserRole.Teacher) navigate('/dashboard/teacher');
+        else if (activeRole === UserRole.Parent) navigate('/dashboard/parent');
+        else navigate('/dashboard');
+    };
+
+    const handleMagicLink = async () => {
+        if (!email.trim()) {
+            setError('Please enter your email address first.');
+            return;
+        }
+        setLoading(true);
+        setError('');
+        setSuccessMessage('');
+
+        try {
+            const apiUrl = (import.meta as any).env?.VITE_API_URL || 'http://localhost:4000';
+            const res = await fetch(`${apiUrl}/api/magic-link`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email })
+            });
+            const json = await res.json();
+            if (res.ok || json.success) {
+                setSuccessMessage(json.message || 'Magic link sent! Check your email or server logs.');
+            } else {
+                setError(json.error || 'Failed to send magic link.');
+            }
+        } catch (e) {
+            console.error('Magic link fetch error:', e);
+            setError('Network error. Please check server is running at ' + ((import.meta as any).env?.VITE_API_URL || 'http://localhost:4000'));
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // Resend OTP helper used by OTPModal
+    const resendOtp = async () => {
+        if (!email.trim()) throw new Error('Email missing');
+        const apiUrl = (import.meta as any).env?.VITE_API_URL || 'http://localhost:4000';
+        try {
+            const extras: any = {};
+            if (activeRole !== UserRole.Librarian) {
+                extras.uniqueId = uniqueId;
+                extras.orgType = orgType;
+            }
+            const res = await fetch(`${apiUrl}/api/resend-otp`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, role: activeRole, extras })
+            });
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(json.error || 'Failed to resend OTP');
+            return;
+        } catch (err: any) {
+            throw new Error(err?.message || 'Network error while resending OTP');
+        }
+    };
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setError('');
+        const validationError = validate();
+        if (validationError) {
+            setError(validationError);
+            return;
+        }
+
+        setLoading(true);
+        try {
+            if (isLogin) {
+                const extras: any = {};
+                if (activeRole !== UserRole.Librarian) {
+                    extras.uniqueId = uniqueId;
+                    extras.orgType = orgType;
+                }
+                extras.rememberMe = rememberMe;
+
+                const result = await login(email, password, activeRole, extras);
+
+                if (result.require2fa) {
+                    setShowOTPModal(true);
+                    setLoading(false);
+                    return;
+                }
+
+                if (result.success) {
+                    if (rememberMe) {
+                        localStorage.setItem('edunexus:remember_me', 'true');
+                    } else {
+                        localStorage.removeItem('edunexus:remember_me');
+                    }
+                    navigateDashboard();
+                } else {
+                    setError(result.error || 'Invalid credentials.');
+                }
+            } else {
+                // Sign Up Logic
+
+                // Access Code Logic (Student/Parent)
+                if ((activeRole === UserRole.Student || activeRole === UserRole.Parent) && accessCode.trim()) {
+                    const result = submitOrgJoinRequest({ code: accessCode.trim(), name, email, role: activeRole, orgType });
+                    if (result.status === 'pending') {
+                        // Use a success state instead of error
+                        setSuccessMessage('Access request submitted! Waiting for management approval.');
+                    } else {
+                        setError('Access code already processed. Please contact management.');
+                    }
+                    setLoading(false);
+                    return;
+                }
+
+                // Teacher Verification Logic
+                if (activeRole === UserRole.Teacher) {
+                    const pendingTeacher = verifyTeacherCode(uniqueId);
+                    if (!pendingTeacher) {
+                        setError('Invalid Unique Code. Please contact Management.');
+                        setLoading(false);
+                        return;
+                    }
+                }
+
+                const extras: any = { uniqueId, instituteName, orgType };
+
+                if (activeRole === UserRole.Teacher) {
+                    extras.title = teacherTitle;
+                    extras.department = department;
+                    extras.teachingAssignments = teachingAssignments;
+                    extras.teacherType = orgType === 'institute' ? 'college' : 'school'; // Map back if needed or keep consistent
+                    if (classInChargeId) extras.classId = classInChargeId;
+                }
+
+                const ok = await signUp(name, email, password, activeRole, extras);
+                if (ok) {
+                    if (activeRole === UserRole.Teacher) consumeTeacherCode(uniqueId);
+                    navigateDashboard();
+                } else {
+                    setError('Sign-up failed. Please try again.');
+                }
+            }
+        } catch (err) {
+            setError('An unexpected error occurred.');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <div className="w-full max-w-md mx-auto select-none" onCopy={(e) => {
+            // Only allow copying from input fields
+            const selection = window.getSelection();
+            const target = e.target as HTMLElement;
+            if (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA') {
+                e.preventDefault();
+            }
+        }} onContextMenu={(e) => {
+            // Disable right-click on non-input elements
+            const target = e.target as HTMLElement;
+            if (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA') {
+                e.preventDefault();
+            }
+        }}>
+            {isOffline && (
+                <div className="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 mb-4" role="alert">
+                    <p className="font-bold">Offline Mode</p>
+                    <p>You are currently offline. Some features may be unavailable.</p>
+                </div>
+            )}
+
+            <Card className="p-0 overflow-hidden shadow-xl border-0">
+                <div className="p-6 md:p-8 space-y-6">
+                    <div className="text-center">
+                        <h2 className="text-2xl font-bold text-gray-900">
+                            {isLogin ? 'Welcome Back' : 'Create Account'}
+                        </h2>
+                        <p className="mt-1 text-sm text-gray-500">
+                            {isLogin ? 'Enter your credentials to access your account' : 'Join EduNexus AI today'}
+                        </p>
+                    </div>
+
+                    {!emailSubmitted && !showForgotPassword ? (
+                        /* Step 1: Email Entry */
+                        <form onSubmit={handleEmailSubmit} className="space-y-4">
+                            <Input
+                                id="email"
+                                label="Email Address"
+                                type="email"
+                                value={email}
+                                onChange={(e) => setEmail(e.target.value)}
+                                onBlur={handleEmailBlur}
+                                placeholder="you@example.com"
+                                required
+                                autoComplete="username"
+                                className="text-black"
+                                error={emailError}
+                            />
+                            <Button
+                                type="submit"
+                                className="w-full py-3 text-lg font-semibold shadow-md transition-transform active:scale-[0.98]"
+                            >
+                                Continue
+                            </Button>
+
+                            <div className="mt-6">
+                                <div className="relative">
+                                    <div className="absolute inset-0 flex items-center">
+                                        <div className="w-full border-t border-gray-300"></div>
+                                    </div>
+                                    <div className="relative flex justify-center text-sm">
+                                        <span className="px-2 bg-white text-gray-500">Or continue with</span>
+                                    </div>
+                                </div>
+
+                                <div className="mt-6 grid grid-cols-2 gap-3">
+                                    <a
+                                        href={`${(() => {
+                                            const envUrl = (import.meta as any).env?.VITE_API_URL;
+                                            if (envUrl) return envUrl;
+                                            // Dynamic fallback: use current hostname but port 4000
+                                            const hostname = window.location.hostname;
+                                            return `http://${hostname}:4000`;
+                                        })()}/auth/google`}
+                                        className="w-full inline-flex justify-center py-2 px-4 border border-gray-300 rounded-md shadow-sm bg-white text-sm font-medium text-gray-500 hover:bg-gray-50"
+                                    >
+                                        <span className="sr-only">Sign in with Google</span>
+                                        <svg className="w-5 h-5" aria-hidden="true" fill="currentColor" viewBox="0 0 24 24">
+                                            <path d="M12.48 10.92v3.28h7.84c-.24 1.84-.853 3.187-1.787 4.133-1.147 1.147-2.933 2.4-6.053 2.4-4.827 0-8.6-3.893-8.6-8.72s3.773-8.72 8.6-8.72c2.6 0 4.507 1.027 5.907 2.347l2.307-2.307C18.747 1.44 16.133 0 12.48 0 5.867 0 .533 5.333.533 12S5.867 24 12.48 24c3.44 0 6.013-1.133 8.053-3.24 2.08-2.16 2.72-5.333 2.72-8.213 0-.8-.08-1.56-.213-2.293h-10.56z" />
+                                        </svg>
+                                    </a>
+                                    <a
+                                        href={`${(() => {
+                                            const envUrl = (import.meta as any).env?.VITE_API_URL;
+                                            if (envUrl) return envUrl;
+                                            const hostname = window.location.hostname;
+                                            return `http://${hostname}:4000`;
+                                        })()}/auth/microsoft`}
+                                        className="w-full inline-flex justify-center py-2 px-4 border border-gray-300 rounded-md shadow-sm bg-white text-sm font-medium text-gray-500 hover:bg-gray-50"
+                                    >
+                                        <span className="sr-only">Sign in with Microsoft</span>
+                                        <svg className="w-5 h-5" aria-hidden="true" fill="currentColor" viewBox="0 0 21 21">
+                                            <path fill="#f25022" d="M1 1h9v9H1z" /><path fill="#00a4ef" d="M1 11h9v9H1z" /><path fill="#7fba00" d="M11 1h9v9H11z" /><path fill="#ffb900" d="M11 11h9v9H11z" />
+                                        </svg>
+                                    </a>
+                                </div>
+                            </div>
+
+                            <div className="text-center mt-4">
+                                <p className="text-sm text-gray-600">
+                                    {isLogin ? "Don't have an account?" : "Already have an account?"}{' '}
+                                    <button
+                                        type="button"
+                                        onClick={() => setIsLogin(!isLogin)}
+                                        className="font-medium text-blue-600 hover:text-blue-500"
+                                    >
+                                        {isLogin ? 'Sign up' : 'Sign in'}
+                                    </button>
+                                </p>
+                            </div>
+                        </form>
+
+                    ) : showForgotPassword ? (
+                        /* Forgot Password Flow */
+                        <form onSubmit={handleForgotPasswordSubmit} className="space-y-4">
+                            <div className="text-center mb-6">
+                                <h3 className="text-lg font-medium text-gray-900">Reset Password</h3>
+                                <p className="text-sm text-gray-500">Enter your email to receive a reset link</p>
+                            </div>
+
+                            <Input
+                                id="reset-email"
+                                label="Email Address"
+                                type="email"
+                                value={email}
+                                onChange={(e) => setEmail(e.target.value)}
+                                required
+                                className="text-black"
+                            />
+
+                            {error && (
+                                <div className="bg-red-50 text-red-600 p-3 rounded text-sm text-center">
+                                    ⚠️ {error}
+                                </div>
+                            )}
+                            {successMessage && (
+                                <div className="bg-green-50 text-green-600 p-3 rounded text-sm text-center">
+                                    ✅ {successMessage}
+                                </div>
+                            )}
+
+                            <Button
+                                type="submit"
+                                className="w-full"
+                                disabled={loading}
+                            >
+                                {loading ? 'Sending...' : 'Send Reset Link'}
+                            </Button>
+
+                            <button
+                                type="button"
+                                onClick={() => setShowForgotPassword(false)}
+                                className="w-full py-2 px-3 text-sm border border-gray-300 rounded-md bg-white text-gray-700 hover:bg-gray-50 font-medium"
+                            >
+                                ← Back to Login
+                            </button>
+                        </form>
+                    ) : (
+                        /* Step 2: Role & Password */
+                        <form onSubmit={handleSubmit} className="space-y-4">
+                            <div className="flex items-center justify-between mb-4">
+                                <div className="flex items-center">
+                                    <div className="h-8 w-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold mr-3">
+                                        {email.charAt(0).toUpperCase()}
+                                    </div>
+                                    <span className="text-sm font-medium text-gray-900">{email}</span>
+                                </div>
+                                <button type="button" onClick={handleResetFlow} className="text-sm text-blue-600 hover:text-blue-500 font-medium">
+                                    ← Change Email
+                                </button>
+                            </div>
+
+                            {/* Role Selector Dropdown */}
+                            <div>
+                                <label htmlFor="role-select" className="block text-sm font-medium text-gray-700 mb-1">
+                                    I am a...
+                                </label>
+                                <select
+                                    id="role-select"
+                                    value={activeRole}
+                                    onChange={(e) => setActiveRole(e.target.value as UserRole)}
+                                    className="block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md text-black"
+                                >
+                                    {roles.map((role) => (
+                                        <option key={role.id} value={role.id}>
+                                            {role.label}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            {/* Org Type Selector (All except Librarian) */}
+                            {activeRole !== UserRole.Librarian && (
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Organization Type</label>
+                                    <div className="flex space-x-4">
+                                        <label className="flex items-center">
+                                            <input
+                                                type="radio"
+                                                name="orgType"
+                                                value="school"
+                                                checked={orgType === 'school'}
+                                                onChange={() => setOrgType('school')}
+                                                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300"
+                                            />
+                                            <span className="ml-2 text-sm text-gray-700">School</span>
+                                        </label>
+                                        <label className="flex items-center">
+                                            <input
+                                                type="radio"
+                                                name="orgType"
+                                                value="institute"
+                                                checked={orgType === 'institute'}
+                                                onChange={() => setOrgType('institute')}
+                                                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300"
+                                            />
+                                            <span className="ml-2 text-sm text-gray-700">Institute</span>
+                                        </label>
+                                    </div>
+                                </div>
+                            )}
+
+                            {!isLogin && (
+                                <Input
+                                    id="name"
+                                    label="Full Name"
+                                    value={name}
+                                    onChange={(e) => setName(e.target.value)}
+                                    placeholder="John Doe"
+                                    required
+                                    className="text-black"
+                                />
+                            )}
+
+                            {/* Unique ID (All except Librarian) */}
+                            {activeRole !== UserRole.Librarian && (
+                                <Input
+                                    id="uniqueId"
+                                    label="Unique ID"
+                                    value={uniqueId}
+                                    onChange={(e) => setUniqueId(e.target.value)}
+                                    placeholder={activeRole === UserRole.Management ? "Admin ID" : "ID / Code"}
+                                    required={isLogin || !accessCode}
+                                    className="text-black"
+                                />
+                            )}
+
+                            {/* Teacher Specific Fields (Signup Only) */}
+                            {!isLogin && activeRole === UserRole.Teacher && (
+                                <>
+                                    <div className="space-y-2">
+                                        <label className="block text-sm font-medium text-gray-700">Role</label>
+                                        <select
+                                            className="w-full bg-white border border-gray-300 rounded-md p-2 text-black focus:ring-blue-500 focus:border-blue-500"
+                                            value={teacherTitle}
+                                            onChange={e => setTeacherTitle(e.target.value)}
+                                        >
+                                            <option value="">-- Select Role --</option>
+                                            {orgType === 'school' ? (
+                                                ['Chairman', 'Director', 'Principal', 'Vice Principal', 'HOD', 'Senior Teacher', 'Class Teacher', 'Subject Teacher'].map(r => <option key={r} value={r}>{r}</option>)
+                                            ) : (
+                                                ['Chairman', 'Director', 'Principal', 'Vice Principal', 'Dean', 'HOD', 'Professor', 'Associate Professor', 'Assistant Professor', 'Lecturer', 'Class Teacher (Advisor)', 'Subject Teacher'].map(r => <option key={r} value={r}>{r}</option>)
+                                            )}
+                                        </select>
+                                    </div>
+
+                                    {isTeachingRole(teacherTitle) && (
+                                        <div className="space-y-2">
+                                            <label className="block text-sm font-medium text-gray-700">Department</label>
+                                            <select
+                                                className="w-full bg-white border border-gray-300 rounded-md p-2 text-black focus:ring-blue-500 focus:border-blue-500"
+                                                value={department}
+                                                onChange={e => setDepartment(e.target.value)}
+                                            >
+                                                <option value="">-- Select Department --</option>
+                                                {departments.map(d => <option key={d} value={d}>{d}</option>)}
+                                            </select>
+                                        </div>
+                                    )}
+
+                                    {isTeachingRole(teacherTitle) && (
+                                        <div className="space-y-2">
+                                            <label className="block text-sm font-medium text-gray-700">Teaching Assignments</label>
+                                            <p className="text-xs text-gray-500">Pair each subject with the class you teach it to.</p>
+                                            <div className="flex gap-2">
+                                                <Input
+                                                    id="subject"
+                                                    label=""
+                                                    placeholder="Subject"
+                                                    value={currentSubject}
+                                                    onChange={e => setCurrentSubject(e.target.value)}
+                                                    className="flex-1 text-black"
+                                                />
+                                                <Input
+                                                    id="class"
+                                                    label=""
+                                                    placeholder="Class"
+                                                    value={currentClass}
+                                                    onChange={e => setCurrentClass(e.target.value)}
+                                                    className="flex-1 text-black"
+                                                />
+                                                <Button type="button" onClick={handleAddAssignment} className="py-2">Add</Button>
+                                            </div>
+                                            <div className="space-y-2 mt-2">
+                                                {teachingAssignments.map((assign, index) => (
+                                                    <div key={index} className="flex justify-between items-center bg-gray-50 p-2 rounded text-sm border border-gray-200">
+                                                        <span className="text-gray-700"><strong>{assign.subject}</strong> to <strong>{assign.classId}</strong></span>
+                                                        <button type="button" onClick={() => removeAssignment(index)} className="text-red-500 hover:text-red-700">×</button>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {isClassTeacher(teacherTitle) && (
+                                        <Input
+                                            id="classInCharge"
+                                            label="Class In-Charge (e.g. 5A)"
+                                            value={classInChargeId}
+                                            onChange={e => setClassInChargeId(e.target.value)}
+                                            placeholder="Enter the class you manage"
+                                            className="text-black"
+                                        />
+                                    )}
+                                </>
+                            )}
+
+                            {!isLogin && activeRole === UserRole.Management && (
+                                <Input
+                                    id="instituteName"
+                                    label={orgType === 'school' ? 'School Name' : 'Institute Name'}
+                                    value={instituteName}
+                                    onChange={(e) => setInstituteName(e.target.value)}
+                                    required
+                                    className="text-black"
+                                />
+                            )}
+
+                            {!isLogin && (activeRole === UserRole.Student || activeRole === UserRole.Parent) && (
+                                <Input
+                                    id="accessCode"
+                                    label="Access Code (Optional)"
+                                    value={accessCode}
+                                    onChange={(e) => setAccessCode(e.target.value)}
+                                    placeholder="Enter join code"
+                                    className="text-black"
+                                />
+                            )}
+
+                            <div className="relative">
+                                <Input
+                                    id="password"
+                                    label="Password"
+                                    type={showPassword ? 'text' : 'password'}
+                                    value={password}
+                                    onChange={(e) => setPassword(e.target.value)}
+                                    onBlur={handlePasswordBlur}
+                                    placeholder="••••••••"
+                                    required
+                                    autoComplete={isLogin ? "current-password" : "new-password"}
+                                    className="text-black"
+                                    error={passwordError}
+                                />
+                                <button
+                                    type="button"
+                                    onClick={() => setShowPassword(!showPassword)}
+                                    className="absolute right-3 top-[34px] text-sm text-gray-500 hover:text-gray-700 focus:outline-none"
+                                    aria-label={showPassword ? "Hide password" : "Show password"}
+                                >
+                                    {showPassword ? 'Hide' : 'Show'}
+                                </button>
+                            </div>
+
+                            {!isLogin && password && (
+                                <div className="mt-1">
+                                    <div className="h-1 w-full bg-gray-200 rounded-full overflow-hidden">
+                                        <div
+                                            className={`h-full transition-all duration-300 ${password.length < 6 ? 'bg-red-500 w-1/3' :
+                                                password.length < 10 ? 'bg-yellow-500 w-2/3' :
+                                                    'bg-green-500 w-full'
+                                                }`}
+                                        />
+                                    </div>
+                                    <p className="text-xs text-right mt-1 text-gray-500">
+                                        {password.length < 6 ? 'Weak' : password.length < 10 ? 'Medium' : 'Strong'}
+                                    </p>
+                                </div>
+                            )}
+
+                            {isLogin && (
+                                <div className="space-y-3">
+                                    <div className="flex items-center">
+                                        <input
+                                            id="remember-me"
+                                            name="remember-me"
+                                            type="checkbox"
+                                            checked={rememberMe}
+                                            onChange={(e) => setRememberMe(e.target.checked)}
+                                            className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                                        />
+                                        <label htmlFor="remember-me" className="ml-2 block text-sm text-gray-900">
+                                            Remember me
+                                        </label>
+                                    </div>
+
+                                    <div className="flex items-center justify-between">
+                                        <button
+                                            type="button"
+                                            onClick={handleResetFlow}
+                                            className="text-sm font-medium text-blue-600 hover:text-blue-500"
+                                            title="Go back and change email"
+                                        >
+                                            ← Change Email
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowForgotPassword(true)}
+                                            className="text-sm font-medium text-blue-600 hover:text-blue-500"
+                                        >
+                                            Forgot password?
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+
+                            {error && (
+                                <div className="bg-red-50 text-red-600 p-3 rounded text-sm text-center" role="alert" aria-live="assertive">
+                                    ⚠️ {error}
+                                </div>
+                            )}
+
+                            {successMessage && (
+                                <div className="bg-green-50 text-green-600 p-3 rounded text-sm text-center" role="status" aria-live="polite">
+                                    ✅ {successMessage}
+                                </div>
+                            )}
+
+                            <Button
+                                type="submit"
+                                className="w-full py-3 text-lg font-semibold shadow-md transition-transform active:scale-[0.98]"
+                                disabled={loading}
+                            >
+                                {loading ? (
+                                    <span className="flex items-center justify-center">
+                                        <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                        </svg>
+                                        Processing...
+                                    </span>
+                                ) : (
+                                    isLogin ? 'Sign In' : 'Create Account'
+                                )}
+                            </Button>
+
+                            {isLogin && (
+                                <button
+                                    type="button"
+                                    onClick={handleMagicLink}
+                                    className="w-full py-2 text-sm font-medium text-blue-600 hover:text-blue-500 hover:bg-blue-50 rounded-md transition-colors border border-transparent hover:border-blue-100"
+                                >
+                                    ✨ Email me a login link
+                                </button>
+                            )}
+                        </form>
+                    )}
+
+                    <div className="mt-4 text-center text-xs text-gray-400">
+                        <p>🔒 Secure Session | 2FA Supported</p>
+                        <div className="mt-2 flex items-center justify-center gap-2">
+                            <span className={`h-2 w-2 rounded-full ${isOffline ? 'bg-red-500' : 'bg-green-500'}`}></span>
+                            <span>{isOffline ? 'Offline Mode' : 'Systems Operational'}</span>
+                        </div>
+                    </div>
+                </div>
+            </Card >
+
+            <OTPModal
+                isOpen={showOTPModal}
+                onClose={() => setShowOTPModal(false)}
+                onVerify={handleVerifyOTP}
+                email={email}
+                onResend={async () => {
+                    try {
+                        setSuccessMessage('');
+                        await resendOtp();
+                        setSuccessMessage('A new code was sent to your email.');
+                    } catch (e: any) {
+                        setError(e?.message || 'Failed to resend code');
+                        throw e;
+                    }
+                }}
+            />
+        </div >
+    );
+};
+
+export default UnifiedLoginForm;

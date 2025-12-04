@@ -12,15 +12,21 @@ const ConfirmCodePage: React.FC = () => {
 
   React.useEffect(() => {
     if (!token) return;
-    setStatus('processing');
-    // try confirming
-    const res = confirmOrgCodeRequest(token);
-    if (res === false) {
-      setStatus('failed');
-    } else {
-      setStatus('success');
-      setResultCode(res.code);
-    }
+    let mounted = true;
+    (async () => {
+      setStatus('processing');
+      // try confirming
+      const res = await confirmOrgCodeRequest(token);
+      if (!mounted) return;
+      if (res === false) {
+        setStatus('failed');
+      } else {
+        setStatus('success');
+        setResultCode(res.code);
+      }
+    })();
+
+    return () => { mounted = false; };
   }, [token]);
 
   return (

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import { useData } from '../context/DataContext';
 import Card from '../components/ui/Card';
@@ -10,6 +10,13 @@ import Layout from '../components/Layout';
 import { useNavigate } from 'react-router-dom';
 import ProfileView from '../components/shared/ProfileView';
 import ManagementNotifications from '../components/management/ManagementNotifications';
+import { ManagementSignupsContent } from './ManagementSignups';
+import UserSearchFilter from '../components/UserSearchFilter';
+import BulkUserImport from '../components/BulkUserImport';
+import BulkActions from '../components/BulkActions';
+import ActivityLogViewer from '../components/ActivityLogViewer';
+import DashboardOverview from '../components/DashboardOverview';
+import axios from 'axios';
 
 const ManagementDashboard: React.FC = () => {
     const { user } = useAuth();
@@ -21,7 +28,9 @@ const ManagementDashboard: React.FC = () => {
         students, parents, addPendingTeacher, pendingTeachers: allPendingTeachers, deleteUser, deletePendingTeacher,
         pendingOrgRequests: allPendingOrgRequests, addOrgRequest, approveOrgRequest, rejectOrgRequest, deleteOrgRequest,
         // management code features added
-        createOrgCodeRequest, confirmOrgCodeRequest, orgCodes, pendingCodeRequests, getNotificationsForEmail
+        createOrgCodeRequest, confirmOrgCodeRequest, orgCodes, pendingCodeRequests, getNotificationsForEmail, viewOrgCode,
+        // pending management signups
+        pendingManagementSignups, retryPendingSignup, cancelPendingSignup
     } = useData();
 
     const isInstitute = (user as any)?.type === 'institute';
@@ -108,6 +117,128 @@ const ManagementDashboard: React.FC = () => {
     const [analyticsModalType, setAnalyticsModalType] = useState<'dept' | 'branch' | null>(null);
     const [selectedAnalyticsItem, setSelectedAnalyticsItem] = useState<string | null>(null);
 
+    // Secure View Code State
+    const [showViewCodeModal, setShowViewCodeModal] = useState(false);
+    const [viewCodePassword, setViewCodePassword] = useState('');
+    const [viewCodeError, setViewCodeError] = useState('');
+    const [viewedCode, setViewedCode] = useState<string | null>(null);
+    const [viewingOrgType, setViewingOrgType] = useState<'school' | 'institute' | null>(null);
+
+    // Phase 1: New State
+    const [dashboardStats, setDashboardStats] = useState<any>(null);
+    const [activityLogs, setActivityLogs] = useState<any[]>([]);
+    const [loadingLogs, setLoadingLogs] = useState(false);
+    const [selectedUsers, setSelectedUsers] = useState<string[]>([]); // IDs
+
+    const copyToClipboard = (text: string) => {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(() => {
+                setSuccessMessage('Copied to clipboard!');
+            }).catch(err => {
+                console.error('Failed to copy: ', err);
+                fallbackCopyTextToClipboard(text);
+            });
+        } else {
+            fallbackCopyTextToClipboard(text);
+        }
+    };
+
+    const fallbackCopyTextToClipboard = (text: string) => {
+        const textArea = document.createElement("textarea");
+        textArea.value = text;
+
+        // Avoid scrolling to bottom
+        textArea.style.top = "0";
+        textArea.style.left = "0";
+        textArea.style.position = "fixed";
+
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+
+        try {
+            const successful = document.execCommand('copy');
+            const msg = successful ? 'successful' : 'unsuccessful';
+            if (successful) {
+                setSuccessMessage('Copied to clipboard!');
+            } else {
+                setSuccessMessage('Unable to copy');
+            }
+        } catch (err) {
+            console.error('Fallback: Oops, unable to copy', err);
+            setSuccessMessage('Failed to copy');
+        }
+
+        document.body.removeChild(textArea);
+    };
+
+    useEffect(() => {
+        if (activeTab === 'Overview') {
+            fetchDashboardStats();
+        } else if (activeTab === 'Activity Logs') {
+            fetchActivityLogs();
+        }
+    }, [activeTab]);
+
+    const fetchDashboardStats = async () => {
+        try {
+            const res = await axios.get(`${import.meta.env.VITE_API_URL || 'http://localhost:4000'}/api/management/stats`, { withCredentials: true });
+            setDashboardStats(res.data);
+        } catch (err) {
+            console.error('Failed to fetch stats', err);
+        }
+    };
+
+    const fetchActivityLogs = async () => {
+        setLoadingLogs(true);
+        try {
+            const res = await axios.get(`${import.meta.env.VITE_API_URL || 'http://localhost:4000'}/api/management/activity-logs`, { withCredentials: true });
+            setActivityLogs(res.data);
+        } catch (err) {
+            console.error('Failed to fetch logs', err);
+        } finally {
+            setLoadingLogs(false);
+        }
+    };
+
+    const handleBulkImport = async (importedUsers: any[]) => {
+        try {
+            const res = await axios.post(`${import.meta.env.VITE_API_URL || 'http://localhost:4000'}/api/management/users/bulk`, { users: importedUsers }, { withCredentials: true });
+            setSuccessMessage(`Imported ${res.data.results.filter((r: any) => r.status === 'created').length} users successfully.`);
+            // Refresh data
+            fetchActivityLogs();
+        } catch (err) {
+            setSuccessMessage('Failed to import users.');
+        }
+    };
+
+    const handleBulkDelete = async () => {
+        if (confirm(`Are you sure you want to delete ${selectedUsers.length} users?`)) {
+            // Implement bulk delete API call here
+            // await axios.post(..., { ids: selectedUsers });
+            setSuccessMessage('Bulk delete not fully implemented yet.');
+            setSelectedUsers([]);
+        }
+    };
+
+    const handleViewCode = async () => {
+        if (!viewCodePassword) {
+            setViewCodeError('Password is required');
+            return;
+        }
+        if (!viewingOrgType) return;
+
+        const res = await viewOrgCode(viewCodePassword, viewingOrgType as 'school' | 'institute');
+        if (res.success && res.code) {
+            setViewedCode(res.code);
+            setShowViewCodeModal(false);
+            setViewCodePassword('');
+            setViewCodeError('');
+        } else {
+            setViewCodeError(res.error || 'Failed to retrieve code');
+        }
+    };
+
     const initiateAction = (type: typeof confirmationType, data: any) => {
         setPendingData(data);
         setConfirmationType(type);
@@ -161,8 +292,7 @@ const ManagementDashboard: React.FC = () => {
         setPendingData(null);
         setConfirmationType(null);
 
-        // Clear success message after 3 seconds
-        setTimeout(() => setSuccessMessage(''), 3000);
+        // Message will stay visible until dismissed by the user
     };
 
     const handleDiscard = () => {
@@ -190,7 +320,6 @@ const ManagementDashboard: React.FC = () => {
             setEditingDeptId(null);
             setEditDeptName('');
             setSuccessMessage('Department Renamed Successfully');
-            setTimeout(() => setSuccessMessage(''), 3000);
         }
     };
 
@@ -229,6 +358,31 @@ const ManagementDashboard: React.FC = () => {
 
     const renderContent = () => {
         switch (activeTab) {
+            case 'Overview':
+                return (
+                    <div className="space-y-6">
+                        <h3 className="text-2xl font-bold">Dashboard Overview</h3>
+                        {dashboardStats ? (
+                            <DashboardOverview
+                                stats={dashboardStats.stats}
+                                roleDistribution={dashboardStats.roleDistribution}
+                                departmentDistribution={dashboardStats.departmentDistribution}
+                            />
+                        ) : (
+                            <p>Loading stats...</p>
+                        )}
+                        <div className="mt-8">
+                            <ActivityLogViewer logs={activityLogs} isLoading={loadingLogs} />
+                        </div>
+                    </div>
+                );
+            case 'Activity Logs':
+                return (
+                    <div className="space-y-6">
+                        <h3 className="text-2xl font-bold">System Activity Logs</h3>
+                        <ActivityLogViewer logs={activityLogs} isLoading={loadingLogs} />
+                    </div>
+                );
             case 'Institute Management':
                 const existingInstituteCodes = orgCodes.filter(c => c.orgType === 'institute' && (c.instituteId ? c.instituteId === currentInstituteId : true));
                 return (
@@ -242,22 +396,48 @@ const ManagementDashboard: React.FC = () => {
 
                             {existingInstituteCodes.length === 0 ? (
                                 <>
-                                    <p className="text-sm text-gray-500 mb-2">Create Institute code — after creating, send an email to developer for confirmation to finalize the code.</p>
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
-                                        <div>
-                                            <label className="block text-sm font-medium mb-1">Request EduNexus AI to Register</label>
-                                            <Input id="mgmtCodeEmailInst" label="" value={managementEmailForCode} onChange={e => setManagementEmailForCode(e.target.value)} />
+                                    {pendingCodeRequests?.filter(r => r.orgType === 'institute' && (r.instituteId ? r.instituteId === currentInstituteId : true)).length > 0 ? (
+                                        <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-md">
+                                            <h5 className="font-bold text-yellow-800 mb-2">Pending Request</h5>
+                                            <p className="text-sm text-yellow-700 mb-2">A request for an Institute Code is pending approval.</p>
+                                            {pendingCodeRequests?.filter(r => r.orgType === 'institute' && (r.instituteId ? r.instituteId === currentInstituteId : true)).map(req => (
+                                                <div key={req.id} className="flex justify-between items-center bg-white p-2 rounded border border-yellow-100 mb-2">
+                                                    <div>
+                                                        <div className="text-xs text-gray-500">Reference Token</div>
+                                                        <div className="font-mono font-bold text-sm">{req.token}</div>
+                                                        <div className="text-xs text-gray-400">{new Date(req.requestAt).toLocaleString()}</div>
+                                                    </div>
+                                                    <Button size="sm" onClick={async () => {
+                                                        if (!req.token) return;
+                                                        const res = await confirmOrgCodeRequest(req.token);
+                                                        if (res && (res as any).success) {
+                                                            setSuccessMessage('Code request confirmed successfully!');
+                                                        } else {
+                                                            setSuccessMessage('Failed to confirm request.');
+                                                        }
+                                                    }}>Simulate Dev Confirm</Button>
+                                                </div>
+                                            ))}
                                         </div>
-                                        <div className="col-span-2 flex gap-2">
-                                            <Button onClick={() => {
-                                                if (!managementEmailForCode.trim()) return setSuccessMessage('Management email is required');
-                                                const req = createOrgCodeRequest({ orgType: 'institute', instituteId: currentInstituteId || undefined, managementEmail: managementEmailForCode });
-                                                setCodeRequestSent(req.token);
-                                                setSuccessMessage('Code request sent to developer');
-                                                setTimeout(() => setSuccessMessage(''), 3500);
-                                            }}>Create Institute Code</Button>
-                                        </div>
-                                    </div>
+                                    ) : (
+                                        <>
+                                            <p className="text-sm text-gray-500 mb-2">Create Institute code — after creating, send an email to developer for confirmation to finalize the code.</p>
+                                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+                                                <div>
+                                                    <label className="block text-sm font-medium mb-1">Request EduNexus AI to Register</label>
+                                                    <Input id="mgmtCodeEmailInst" label="" value={managementEmailForCode} onChange={e => setManagementEmailForCode(e.target.value)} />
+                                                </div>
+                                                <div className="col-span-2 flex gap-2">
+                                                    <Button onClick={async () => {
+                                                        if (!managementEmailForCode.trim()) return setSuccessMessage('Management email is required');
+                                                        const req = await createOrgCodeRequest({ orgType: 'institute', instituteId: currentInstituteId || undefined, managementEmail: managementEmailForCode });
+                                                        setCodeRequestSent(req.token);
+                                                        setSuccessMessage('Code request sent to developer');
+                                                    }}>Create Institute Code</Button>
+                                                </div>
+                                            </div>
+                                        </>
+                                    )}
                                 </>
                             ) : (
                                 <p className="text-sm text-green-600 mb-4">You have already created an Institute Code.</p>
@@ -270,11 +450,20 @@ const ManagementDashboard: React.FC = () => {
                                     {existingInstituteCodes.map(c => (
                                         <div key={c.id} className="p-2 bg-[rgb(var(--subtle-background-color))] rounded flex items-center justify-between">
                                             <div>
-                                                <div className="font-mono font-bold text-lg">{c.code}</div>
+                                                <div className="font-mono font-bold text-lg">
+                                                    {viewedCode && viewingOrgType === 'institute' ? viewedCode : '******'}
+                                                </div>
                                                 <div className="text-xs text-[rgb(var(--text-secondary-color))]">Created: {new Date(c.createdAt).toLocaleDateString('en-GB')}</div>
                                             </div>
                                             <div className="flex gap-2">
-                                                <Button size="sm" variant="secondary" onClick={() => { navigator.clipboard.writeText(c.code); setSuccessMessage('Copied code'); setTimeout(() => setSuccessMessage(''), 2000); }}>Copy</Button>
+                                                {viewedCode && viewingOrgType === 'institute' ? (
+                                                    <>
+                                                        <Button size="sm" variant="secondary" onClick={() => copyToClipboard(viewedCode)}>Copy</Button>
+                                                        <Button size="sm" variant="outline" onClick={() => { setViewedCode(null); setViewingOrgType(null); }}>Hide</Button>
+                                                    </>
+                                                ) : (
+                                                    <Button size="sm" variant="secondary" onClick={() => { setViewingOrgType('institute'); setShowViewCodeModal(true); }}>View Code</Button>
+                                                )}
                                             </div>
                                         </div>
                                     ))}
@@ -300,11 +489,10 @@ const ManagementDashboard: React.FC = () => {
                                                         setSuccessMessage('Approved');
                                                         if (res.activationToken) setCreatedRequestCode(res.activationToken);
                                                         if (res.tempPassword) setCreatedRequestCode(res.tempPassword);
-                                                        setTimeout(() => setSuccessMessage(''), 2500);
                                                     }
                                                 }}>Approve</Button>
-                                                <Button size="sm" variant="danger" onClick={() => { rejectOrgRequest(req.id); setSuccessMessage('Rejected'); setTimeout(() => setSuccessMessage(''), 2500); }}>Reject</Button>
-                                                <Button size="sm" variant="outline" onClick={() => { deleteOrgRequest(req.id); setSuccessMessage('Deleted'); setTimeout(() => setSuccessMessage(''), 2000); }}>Delete</Button>
+                                                <Button size="sm" variant="danger" onClick={() => { rejectOrgRequest(req.id); setSuccessMessage('Rejected'); }}>Reject</Button>
+                                                <Button size="sm" variant="outline" onClick={() => { deleteOrgRequest(req.id); setSuccessMessage('Deleted'); }}>Delete</Button>
                                                 <Button size="sm" variant="secondary" onClick={() => { const people = users.filter(u => (u as any).instituteId === req.instituteId || (u as any).orgType === 'institute'); setOrgPeopleList(people); setShowOrgPeopleModal(true); }}>See existing people</Button>
                                             </div>
                                         </div>
@@ -312,6 +500,27 @@ const ManagementDashboard: React.FC = () => {
                                 </div>
                             </Card>
                         )}
+
+                        <div className="mt-4">
+                            <h5 className="font-semibold">Pending Management Signups</h5>
+                            {pendingManagementSignups.filter(p => !p.email || (p.email && (p.email.includes('@') ? true : true))).length === 0 && (
+                                <p className="text-gray-500">No queued signups pending synchronization.</p>
+                            )}
+                            <div className="space-y-2 mt-2">
+                                {pendingManagementSignups.map(p => (
+                                    <div key={p.id} className="p-2 bg-[rgb(var(--subtle-background-color))] rounded flex items-center justify-between">
+                                        <div className="flex-1">
+                                            <div className="font-semibold">{p.email} <span className="text-xs text-gray-400">(created {new Date(p.createdAt).toLocaleString()})</span></div>
+                                            <div className="text-xs text-[rgb(var(--text-secondary-color))]">Attempts: {p.attempts || 0} {p.error ? `• Error: ${p.error}` : ''}</div>
+                                        </div>
+                                        <div className="flex gap-2 ml-4">
+                                            <Button size="sm" variant="secondary" onClick={() => retryPendingSignup(p.id)}>Retry</Button>
+                                            <Button size="sm" variant="outline" onClick={() => cancelPendingSignup(p.id)}>Cancel</Button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
                     </div>
                 );
 
@@ -328,22 +537,48 @@ const ManagementDashboard: React.FC = () => {
 
                             {existingSchoolCodes.length === 0 ? (
                                 <>
-                                    <p className="text-sm text-gray-500 mb-2">Create School code — after creating, send an email to developer for confirmation to finalize the code.</p>
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
-                                        <div>
-                                            <label className="block text-sm font-medium mb-1">Management email to receive final code</label>
-                                            <Input id="mgmtCodeEmailSchool" label="" value={managementEmailForCode} onChange={e => setManagementEmailForCode(e.target.value)} />
+                                    {pendingCodeRequests?.filter(r => r.orgType === 'school' && (r.instituteId ? r.instituteId === currentInstituteId : true)).length > 0 ? (
+                                        <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-md">
+                                            <h5 className="font-bold text-yellow-800 mb-2">Pending Request</h5>
+                                            <p className="text-sm text-yellow-700 mb-2">A request for a School Code is pending approval.</p>
+                                            {pendingCodeRequests?.filter(r => r.orgType === 'school' && (r.instituteId ? r.instituteId === currentInstituteId : true)).map(req => (
+                                                <div key={req.id} className="flex justify-between items-center bg-white p-2 rounded border border-yellow-100 mb-2">
+                                                    <div>
+                                                        <div className="text-xs text-gray-500">Reference Token</div>
+                                                        <div className="font-mono font-bold text-sm">{req.token}</div>
+                                                        <div className="text-xs text-gray-400">{new Date(req.requestAt).toLocaleString()}</div>
+                                                    </div>
+                                                    <Button size="sm" onClick={async () => {
+                                                        if (!req.token) return;
+                                                        const res = await confirmOrgCodeRequest(req.token);
+                                                        if (res && (res as any).success) {
+                                                            setSuccessMessage('Code request confirmed successfully!');
+                                                        } else {
+                                                            setSuccessMessage('Failed to confirm request.');
+                                                        }
+                                                    }}>Simulate Dev Confirm</Button>
+                                                </div>
+                                            ))}
                                         </div>
-                                        <div className="col-span-2 flex gap-2">
-                                            <Button onClick={() => {
-                                                if (!managementEmailForCode.trim()) return setSuccessMessage('Management email is required');
-                                                const req = createOrgCodeRequest({ orgType: 'school', instituteId: currentInstituteId || undefined, managementEmail: managementEmailForCode });
-                                                setCodeRequestSent(req.token);
-                                                setSuccessMessage('School code request sent to developer');
-                                                setTimeout(() => setSuccessMessage(''), 3500);
-                                            }}>Create School Code</Button>
-                                        </div>
-                                    </div>
+                                    ) : (
+                                        <>
+                                            <p className="text-sm text-gray-500 mb-2">Create School code — after creating, send an email to developer for confirmation to finalize the code.</p>
+                                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+                                                <div>
+                                                    <label className="block text-sm font-medium mb-1">Management email to receive final code</label>
+                                                    <Input id="mgmtCodeEmailSchool" label="" value={managementEmailForCode} onChange={e => setManagementEmailForCode(e.target.value)} />
+                                                </div>
+                                                <div className="col-span-2 flex gap-2">
+                                                    <Button onClick={async () => {
+                                                        if (!managementEmailForCode.trim()) return setSuccessMessage('Management email is required');
+                                                        const req = await createOrgCodeRequest({ orgType: 'school', instituteId: currentInstituteId || undefined, managementEmail: managementEmailForCode });
+                                                        setCodeRequestSent(req.token);
+                                                        setSuccessMessage('School code request sent to developer');
+                                                    }}>Create School Code</Button>
+                                                </div>
+                                            </div>
+                                        </>
+                                    )}
                                 </>
                             ) : (
                                 <p className="text-sm text-green-600 mb-4">You have already created a School Code.</p>
@@ -356,11 +591,20 @@ const ManagementDashboard: React.FC = () => {
                                     {existingSchoolCodes.map(c => (
                                         <div key={c.id} className="p-2 bg-[rgb(var(--subtle-background-color))] rounded flex items-center justify-between">
                                             <div>
-                                                <div className="font-mono font-bold text-lg">{c.code}</div>
+                                                <div className="font-mono font-bold text-lg">
+                                                    {viewedCode && viewingOrgType === 'school' ? viewedCode : '******'}
+                                                </div>
                                                 <div className="text-xs text-[rgb(var(--text-secondary-color))]">Created: {new Date(c.createdAt).toLocaleString()}</div>
                                             </div>
                                             <div className="flex gap-2">
-                                                <Button size="sm" variant="secondary" onClick={() => { navigator.clipboard.writeText(c.code); setSuccessMessage('Copied code'); setTimeout(() => setSuccessMessage(''), 2000); }}>Copy</Button>
+                                                {viewedCode && viewingOrgType === 'school' ? (
+                                                    <>
+                                                        <Button size="sm" variant="secondary" onClick={() => copyToClipboard(viewedCode)}>Copy</Button>
+                                                        <Button size="sm" variant="outline" onClick={() => { setViewedCode(null); setViewingOrgType(null); }}>Hide</Button>
+                                                    </>
+                                                ) : (
+                                                    <Button size="sm" variant="secondary" onClick={() => { setViewingOrgType('school'); setShowViewCodeModal(true); }}>View Code</Button>
+                                                )}
                                             </div>
                                         </div>
                                     ))}
@@ -385,11 +629,10 @@ const ManagementDashboard: React.FC = () => {
                                                     setSuccessMessage('Approved');
                                                     if (res.activationToken) setCreatedRequestCode(res.activationToken);
                                                     if (res.tempPassword) setCreatedRequestCode(res.tempPassword);
-                                                    setTimeout(() => setSuccessMessage(''), 2500);
                                                 }
                                             }}>Approve</Button>
-                                            <Button size="sm" variant="danger" onClick={() => { rejectOrgRequest(req.id); setSuccessMessage('Rejected'); setTimeout(() => setSuccessMessage(''), 2500); }}>Reject</Button>
-                                            <Button size="sm" variant="outline" onClick={() => { deleteOrgRequest(req.id); setSuccessMessage('Deleted'); setTimeout(() => setSuccessMessage(''), 2000); }}>Delete</Button>
+                                            <Button size="sm" variant="danger" onClick={() => { rejectOrgRequest(req.id); setSuccessMessage('Rejected'); }}>Reject</Button>
+                                            <Button size="sm" variant="outline" onClick={() => { deleteOrgRequest(req.id); setSuccessMessage('Deleted'); }}>Delete</Button>
                                             <Button size="sm" variant="secondary" onClick={() => { const people = users.filter(u => (u as any).instituteId === req.instituteId || (u as any).orgType === 'school'); setOrgPeopleList(people); setShowOrgPeopleModal(true); }}>See existing people</Button>
                                         </div>
                                     </div>
@@ -483,6 +726,17 @@ const ManagementDashboard: React.FC = () => {
 
                         {teacherViewMode === 'pending' && (
                             <>
+                                <UserSearchFilter
+                                    roles={Object.values(TeacherTitle)}
+                                    departments={visibleDepartments.map(d => d.name)}
+                                    onSearch={(q, f) => console.log('Search:', q, f)}
+                                />
+                                <BulkUserImport onImport={handleBulkImport} />
+                                <BulkActions
+                                    selectedCount={selectedUsers.length}
+                                    onDelete={handleBulkDelete}
+                                    onExport={() => alert('Exporting...')}
+                                />
                                 <Card className="p-6">
                                     <h3 className="text-xl font-bold mb-4">Generate Teacher Code</h3>
                                     <p className="mb-4 text-sm text-gray-600">Select a role and department (optional) to generate a unique sign-up code for a new teacher.</p>
@@ -519,7 +773,7 @@ const ManagementDashboard: React.FC = () => {
                                             <p className="text-sm text-green-800 font-bold">Code Generated Successfully!</p>
                                             <div className="flex items-center gap-4 mt-2">
                                                 <span className="text-3xl font-mono font-bold tracking-wider">{generatedCode}</span>
-                                                <Button size="sm" variant="secondary" onClick={() => { navigator.clipboard.writeText(generatedCode); alert('Copied!'); }}>Copy</Button>
+                                                <Button size="sm" variant="secondary" onClick={() => copyToClipboard(generatedCode)}>Copy</Button>
                                                 <Button size="sm" variant="outline" onClick={() => setGeneratedCode(null)}>Done</Button>
                                             </div>
                                             <p className="text-xs text-green-700 mt-2">Share this code with the teacher. They will need it to sign up.</p>
@@ -642,6 +896,8 @@ const ManagementDashboard: React.FC = () => {
                 return <ProfileView />;
             case 'Notifications':
                 return <ManagementNotifications />;
+            case 'Pending Signups':
+                return <ManagementSignupsContent />;
             default:
                 return <div>Select a tab</div>;
         }
@@ -655,9 +911,13 @@ const ManagementDashboard: React.FC = () => {
 
 
 
+    // Fix: Only show one management menu item based on org type
     const navItems = [
-        ...(isInstitute ? [{ name: 'Institute Management', icon: <Icon path="M3 13.5V6.75a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 6.75v6.75M3 13.5a2.25 2.25 0 002.25 2.25h13.5A2.25 2.25 0 0021 13.5" /> }] : []),
-        ...(!isInstitute ? [{ name: 'School Management', icon: <Icon path="M12 7l5 3.5V18a2 2 0 01-2 2H9a2 2 0 01-2-2V10.5L12 7z" /> }] : []),
+        { name: 'Overview', icon: <Icon path="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" /> },
+        isInstitute
+            ? { name: 'Institute Management', icon: <Icon path="M3 13.5V6.75a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 6.75v6.75M3 13.5a2.25 2.25 0 002.25 2.25h13.5A2.25 2.25 0 0021 13.5" /> }
+            : { name: 'School Management', icon: <Icon path="M12 7l5 3.5V18a2 2 0 01-2 2H9a2 2 0 01-2-2V10.5L12 7z" /> },
+        { name: 'Pending Signups', icon: <Icon path="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a6 6 0 00-6 6h12a6 6 0 00-6-6z" /> },
         { name: 'Role Management', icon: <Icon path="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" /> },
         { name: 'Department', icon: <Icon path="M3.75 21h16.5M4.5 3h15M5.25 3v18m13.5-18v18M9 6.75h1.5m-1.5 3h1.5m-1.5 3h1.5m3-6H15m-1.5 3H15m-1.5 3H15M9 21v-3.375c0-.621.504-1.125 1.125-1.125h3.75c.621 0 1.125.504 1.125 1.125V21" /> },
         { name: 'Analytics', icon: <Icon path="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" /> },
@@ -665,17 +925,21 @@ const ManagementDashboard: React.FC = () => {
         { name: 'Profile', icon: <Icon path="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.5 19.5a8.25 8.25 0 0115 0" /> }
     ];
 
+    // Clear successMessage on logout or user change
+    useEffect(() => {
+        setSuccessMessage('');
+    }, [user]);
+
     return (
         <Layout navItems={navItems} activeItem={activeTab} setActiveItem={setActiveTab} profileNavItemName="Profile">
             {successMessage && (
-                <div className="fixed top-4 right-4 bg-blue-900 text-blue-100 px-6 py-3 rounded shadow-lg z-50 animate-fade-in-down">
-                    {successMessage}
+                <div className="fixed top-4 right-4 bg-blue-900 text-blue-100 px-6 py-3 rounded shadow-lg z-50 animate-fade-in-down flex items-start gap-3">
+                    <div className="flex-1 whitespace-pre-wrap">{successMessage}</div>
+                    <button aria-label="Dismiss message" className="text-blue-200 hover:text-white" onClick={() => setSuccessMessage('')}>Dismiss</button>
                 </div>
             )}
 
             {renderContent()}
-
-
 
             <Modal isOpen={showConfirmation} onClose={handleDiscard}>
                 <div className="space-y-4">
@@ -769,6 +1033,26 @@ const ManagementDashboard: React.FC = () => {
                     </div>
                 </div>
             </Modal>
+            {showViewCodeModal && (
+                <Modal isOpen={true} onClose={() => { setShowViewCodeModal(false); setViewCodePassword(''); setViewCodeError(''); }}>
+                    <div className="space-y-4">
+                        <h3 className="text-xl font-bold">View Organization Code</h3>
+                        <p className="text-sm text-gray-500">Enter your password to view the {viewingOrgType} code.</p>
+                        <Input
+                            id="viewCodePass"
+                            label="Password"
+                            type="password"
+                            value={viewCodePassword}
+                            onChange={e => setViewCodePassword(e.target.value)}
+                        />
+                        {viewCodeError && <p className="text-red-500 text-sm">{viewCodeError}</p>}
+                        <div className="flex justify-end gap-2">
+                            <Button variant="outline" onClick={() => { setShowViewCodeModal(false); setViewCodePassword(''); setViewCodeError(''); }}>Cancel</Button>
+                            <Button onClick={handleViewCode}>View Code</Button>
+                        </div>
+                    </div>
+                </Modal>
+            )}
         </Layout>
     );
 };
