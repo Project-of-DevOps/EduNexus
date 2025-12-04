@@ -1,1 +1,0 @@
-ALTER TABLE org_code_requests ADD COLUMN IF NOT EXISTS org_code VARCHAR(50);
