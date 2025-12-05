@@ -1,8 +1,9 @@
 
 import React, { createContext, useState, useContext, ReactNode } from 'react';
 import { LoggedInUser, UserRole, Student, Teacher, Parent } from '../types';
-import { findDummyUser } from '../data/loginDummyUsers';
+
 import { useData } from './DataContext';
+import { supabase } from '../services/supabaseClient';
 
 interface AuthContextType {
   user: LoggedInUser | null;
@@ -56,6 +57,49 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       sessionStorage.removeItem('edunexus:auth_user');
     }
   }, [user, rememberMe]);
+
+  // Listen for Supabase Auth Changes (Google Login)
+  React.useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_IN' && session) {
+        // If we already have a user logged in with the same email, do nothing (assumed synced)
+        // But if user is null or email mismatch, we verify with backend
+        if (user && user.email.toLowerCase() === (session.user.email || '').toLowerCase()) return;
+
+        console.log('Supabase Signed In, verifying with backend...');
+        const apiUrl = (import.meta as any).env?.VITE_API_URL || `http://${window.location.hostname}:4000`;
+        try {
+          const resp = await fetch(`${apiUrl}/api/auth/google-login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ accessToken: session.access_token })
+          });
+
+          if (resp.ok) {
+            const json = await resp.json();
+            if (json.success && json.user) {
+              // persist a local copy (without password) so the app can use it
+              const serverUser = json.user;
+              addUser({ ...serverUser, password: undefined } as any);
+              setUser(serverUser as LoggedInUser);
+            }
+          } else {
+            console.warn('Google login failed with backend', resp.status);
+            // If account not found (404), force logout from Supabase to prevent stuck state
+            // and show alert (or let UI handle it)
+            if (resp.status === 404) {
+              alert('Account not found. Please sign up first.');
+              await supabase.auth.signOut();
+            }
+          }
+        } catch (e) {
+          console.error('Failed to verify Google login', e);
+        }
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, [user, addUser]);
 
   const login = async (email: string, password: string, role: UserRole, extra: Record<string, any> | undefined = undefined): Promise<{ success: boolean; error?: string; require2fa?: boolean }> => {
     // First check any users stored in DataContext (created via sign up)
@@ -157,36 +201,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
     }
 
-    // For now we validate against the small dummy login list so devs can build the
-    // application without a backend. Passwords are stored in-memory only.
-    // If no existing created user matches, fall back to the dummy dataset
-    const found = findDummyUser(email, role);
-    if (!found) return { success: false, error: 'Unregistered email' };
-    // If the dummy record contains a password — check it.
-    if (found.password && found.password !== password) return { success: false, error: 'Wrong password' };
 
-    // Build a minimal LoggedInUser from the dummy record
-    const base: Partial<LoggedInUser> = {
-      id: found.id || `user_${Date.now()}`,
-      name: found.name || 'Guest User',
-      email: found.email || '',
-      role: found.role as UserRole,
-    };
-
-    // Map role specific fields
-    if (found.role === UserRole.Student) {
-      setUser({ ...(base as any), parentId: (found as any).parentId || '', classId: (found as any).classId || '', instituteId: (found as any).instituteId || '' } as Student);
-    } else if (found.role === UserRole.Teacher) {
-      // include title/subjects when available on dummy entries
-      setUser({ ...(base as any), department: (found as any).department || '', instituteId: (found as any).instituteId || '', reportingToId: (found as any).reportingToId || '', title: (found as any).title, subjects: (found as any).subjects } as Teacher);
-    } else if (found.role === UserRole.Parent) {
-      setUser({ ...(base as any), childIds: (found as any).childIds || [] } as Parent);
-    } else {
-      // default fallback
-      setUser(base as LoggedInUser);
-    }
-
-    return { success: true };
+    // Use fallback error if server login failed and no local match
+    return { success: false, error: 'Login failed or user not found' };
   };
 
   const signUpAsGuest = (role: UserRole) => {
@@ -262,7 +279,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
 
     // Persist users to the server when available (triggers welcome email)
-    const apiUrl = (import.meta as any).env?.VITE_API_URL || 'http://localhost:4000';
+    const apiUrl = (import.meta as any).env?.VITE_API_URL || `http://${window.location.hostname}:4000`;
     if (apiUrl) {
       try {
         const resp = await fetch(`${apiUrl}/api/signup`, {
@@ -273,6 +290,13 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         if (resp.ok) {
           const json = await resp.json();
           if (json && json.success && json.user) {
+            // Sync with Supabase Auth (create user there too)
+            try {
+              await supabase.auth.signUp({ email, password });
+            } catch (sbErr) {
+              console.warn('Supabase Auth Sync Failed:', sbErr);
+            }
+
             // add a local copy and activate session
             const u = { ...json.user };
             addUser({ ...u, password: undefined } as any);
@@ -335,10 +359,10 @@ export const useAuth = () => {
     return {
       user: null,
       login: async () => ({ success: false, error: 'Auth provider not initialized' }),
-      logout: () => {},
-      signUpAsGuest: () => {},
+      logout: () => { },
+      signUpAsGuest: () => { },
       signUp: async () => false,
-      updateProfile: () => {}
+      updateProfile: () => { }
     } as AuthContextType;
   }
   return context;

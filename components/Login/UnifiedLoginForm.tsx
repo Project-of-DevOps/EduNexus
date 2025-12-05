@@ -7,6 +7,7 @@ import Button from '../ui/Button';
 import Input from '../ui/Input';
 import Card from '../ui/Card';
 import OTPModal from '../auth/OTPModal';
+import { supabase } from '../../services/supabaseClient';
 
 const roles = [
     { id: UserRole.Management, label: 'Management' },
@@ -51,6 +52,7 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
 
     // Teacher Specific State
     const [teacherTitle, setTeacherTitle] = useState('');
+    const [managementTitle, setManagementTitle] = useState('');
     const [department, setDepartment] = useState('');
     const [currentSubject, setCurrentSubject] = useState('');
     const [currentClass, setCurrentClass] = useState('');
@@ -65,6 +67,8 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
     const [showOTPModal, setShowOTPModal] = useState(false);
     const [twoFactorToken, setTwoFactorToken] = useState<string | null>(null);
     const [showForgotPassword, setShowForgotPassword] = useState(false);
+    const [showGoogleLinkModal, setShowGoogleLinkModal] = useState(false);
+    const [popupError, setPopupError] = useState<string | null>(null);
 
     // Inline Validation State
     const [emailError, setEmailError] = useState('');
@@ -139,18 +143,55 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
         setPasswordError(validatePassword(password));
     };
 
-    const handleEmailSubmit = (e: React.FormEvent) => {
+    const handleEmailSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        console.log('Submitting email:', email);
         const err = validateEmail(email);
         if (err) {
-            console.log('Email error:', err);
             setEmailError(err);
             return;
         }
         setEmailError('');
+
+        if (isLogin) {
+            setLoading(true);
+            try {
+                const apiUrl = (import.meta as any).env?.VITE_API_URL || `http://${window.location.hostname}:4000`;
+                const res = await fetch(`${apiUrl}/api/auth/check-email`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email })
+                });
+
+                if (res.ok) {
+                    const json = await res.json();
+                    if (!json.exists) {
+                        setLoading(false);
+                        // Show centered popup instead of inline error
+                        setPopupError('User not registered , Consider regestring before sing-in');
+                        setTimeout(() => setPopupError(null), 4000);
+                        return;
+                    }
+                } else {
+                    // Endpoint failed or Server Error
+                    console.warn('Email check returned status:', res.status);
+                    setLoading(false);
+                    // If endpoint missing (404) or error (500), safely block
+                    setPopupError('System Error: Unable to verify email. Check server connection.');
+                    setTimeout(() => setPopupError(null), 4000);
+                    return;
+                }
+            } catch (e) {
+                console.warn('Email check failed', e);
+                // On error, we might choose to block or allow. Blocking is safer for "don't let next page"
+                setLoading(false);
+                setPopupError('Unable to verify email. Please try again.');
+                setTimeout(() => setPopupError(null), 4000);
+                return;
+            }
+            setLoading(false);
+        }
+
         setEmailSubmitted(true);
-        console.log('Email submitted set to true');
     };
 
     const handleResetFlow = () => {
@@ -276,21 +317,23 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
         setSuccessMessage('');
 
         try {
-            const apiUrl = (import.meta as any).env?.VITE_API_URL || 'http://localhost:4000';
-            const res = await fetch(`${apiUrl}/api/magic-link`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email })
+            // Using Supabase Magic Link
+            const redirectTo = `${window.location.origin}/dashboard`;
+            const { error } = await supabase.auth.signInWithOtp({
+                email,
+                options: {
+                    emailRedirectTo: redirectTo
+                }
             });
-            const json = await res.json();
-            if (res.ok || json.success) {
-                setSuccessMessage(json.message || 'Magic link sent! Check your email or server logs.');
+
+            if (error) {
+                setError(error.message || 'Failed to send magic link.');
             } else {
-                setError(json.error || 'Failed to send magic link.');
+                setSuccessMessage('Magic link sent! Check your email.');
             }
         } catch (e) {
-            console.error('Magic link fetch error:', e);
-            setError('Network error. Please check server is running at ' + ((import.meta as any).env?.VITE_API_URL || 'http://localhost:4000'));
+            console.error('Magic link error:', e);
+            setError('Unexpected error sending magic link.');
         } finally {
             setLoading(false);
         }
@@ -390,12 +433,15 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                     extras.teachingAssignments = teachingAssignments;
                     extras.teacherType = orgType === 'institute' ? 'college' : 'school'; // Map back if needed or keep consistent
                     if (classInChargeId) extras.classId = classInChargeId;
+                } else if (activeRole === UserRole.Management) {
+                    extras.title = managementTitle;
                 }
 
                 const ok = await signUp(name, email, password, activeRole, extras);
                 if (ok) {
                     if (activeRole === UserRole.Teacher) consumeTeacherCode(uniqueId);
-                    navigateDashboard();
+                    // Instead of navigating immediately, ask to link Google
+                    setShowGoogleLinkModal(true);
                 } else {
                     setError('Sign-up failed. Please try again.');
                 }
@@ -473,36 +519,39 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                                     </div>
                                 </div>
 
-                                <div className="mt-6 grid grid-cols-2 gap-3">
-                                    <a
-                                        href={`${(() => {
-                                            const envUrl = (import.meta as any).env?.VITE_API_URL;
-                                            if (envUrl) return envUrl;
-                                            // Dynamic fallback: use current hostname but port 4000
-                                            const hostname = window.location.hostname;
-                                            return `http://${hostname}:4000`;
-                                        })()}/auth/google`}
-                                        className="w-full inline-flex justify-center py-2 px-4 border border-gray-300 rounded-md shadow-sm bg-white text-sm font-medium text-gray-500 hover:bg-gray-50"
-                                    >
-                                        <span className="sr-only">Sign in with Google</span>
-                                        <svg className="w-5 h-5" aria-hidden="true" fill="currentColor" viewBox="0 0 24 24">
-                                            <path d="M12.48 10.92v3.28h7.84c-.24 1.84-.853 3.187-1.787 4.133-1.147 1.147-2.933 2.4-6.053 2.4-4.827 0-8.6-3.893-8.6-8.72s3.773-8.72 8.6-8.72c2.6 0 4.507 1.027 5.907 2.347l2.307-2.307C18.747 1.44 16.133 0 12.48 0 5.867 0 .533 5.333.533 12S5.867 24 12.48 24c3.44 0 6.013-1.133 8.053-3.24 2.08-2.16 2.72-5.333 2.72-8.213 0-.8-.08-1.56-.213-2.293h-10.56z" />
-                                        </svg>
-                                    </a>
-                                    <a
-                                        href={`${(() => {
-                                            const envUrl = (import.meta as any).env?.VITE_API_URL;
-                                            if (envUrl) return envUrl;
-                                            const hostname = window.location.hostname;
-                                            return `http://${hostname}:4000`;
-                                        })()}/auth/microsoft`}
-                                        className="w-full inline-flex justify-center py-2 px-4 border border-gray-300 rounded-md shadow-sm bg-white text-sm font-medium text-gray-500 hover:bg-gray-50"
-                                    >
-                                        <span className="sr-only">Sign in with Microsoft</span>
-                                        <svg className="w-5 h-5" aria-hidden="true" fill="currentColor" viewBox="0 0 21 21">
-                                            <path fill="#f25022" d="M1 1h9v9H1z" /><path fill="#00a4ef" d="M1 11h9v9H1z" /><path fill="#7fba00" d="M11 1h9v9H11z" /><path fill="#ffb900" d="M11 11h9v9H11z" />
-                                        </svg>
-                                    </a>
+                                <div className="mt-6 space-y-3">
+                                    {/* Google OAuth Button */}
+                                    {/* Google OAuth Button: Only show for Login flow (step 1) */}
+                                    {isLogin && (
+                                        <button
+                                            type="button"
+                                            onClick={async () => {
+                                                const redirectTo = `${window.location.origin}/dashboard`;
+                                                const { error } = await supabase.auth.signInWithOAuth({
+                                                    provider: 'google',
+                                                    options: {
+                                                        redirectTo,
+                                                        queryParams: {
+                                                            access_type: 'offline',
+                                                            prompt: 'consent'
+                                                        }
+                                                    }
+                                                });
+                                                if (error) {
+                                                    console.error('Google Auth Error:', error.message);
+                                                    setError(`Google sign ${isLogin ? 'in' : 'up'} failed: ${error.message}`);
+                                                }
+                                            }}
+                                            className="w-full inline-flex justify-center items-center py-2 px-4 border border-gray-300 rounded-md shadow-sm bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+                                        >
+                                            <svg className="w-5 h-5 mr-2" aria-hidden="true" fill="currentColor" viewBox="0 0 24 24">
+                                                <path d="M12.48 10.92v3.28h7.84c-.24 1.84-.853 3.187-1.787 4.133-1.147 1.147-2.933 2.4-6.053 2.4-4.827 0-8.6-3.893-8.6-8.72s3.773-8.72 8.6-8.72c2.6 0 4.507 1.027 5.907 2.347l2.307-2.307C18.747 1.44 16.133 0 12.48 0 5.867 0 .533 5.333.533 12S5.867 24 12.48 24c3.44 0 6.013-1.133 8.053-3.24 2.08-2.16 2.72-5.333 2.72-8.213 0-.8-.08-1.56-.213-2.293h-10.56z" />
+                                            </svg>
+                                            <span>Continue with Google</span>
+                                        </button>
+                                    )}
+
+
                                 </div>
                             </div>
 
@@ -667,9 +716,9 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                                         >
                                             <option value="">-- Select Role --</option>
                                             {orgType === 'school' ? (
-                                                ['Chairman', 'Director', 'Principal', 'Vice Principal', 'HOD', 'Senior Teacher', 'Class Teacher', 'Subject Teacher'].map(r => <option key={r} value={r}>{r}</option>)
+                                                ['HOD', 'Senior Teacher', 'Class Teacher', 'Subject Teacher'].map(r => <option key={r} value={r}>{r}</option>)
                                             ) : (
-                                                ['Chairman', 'Director', 'Principal', 'Vice Principal', 'Dean', 'HOD', 'Professor', 'Associate Professor', 'Assistant Professor', 'Lecturer', 'Class Teacher (Advisor)', 'Subject Teacher'].map(r => <option key={r} value={r}>{r}</option>)
+                                                ['HOD', 'Professor', 'Associate Professor', 'Assistant Professor', 'Lecturer', 'Class Teacher (Advisor)', 'Subject Teacher'].map(r => <option key={r} value={r}>{r}</option>)
                                             )}
                                         </select>
                                     </div>
@@ -736,14 +785,31 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                             )}
 
                             {!isLogin && activeRole === UserRole.Management && (
-                                <Input
-                                    id="instituteName"
-                                    label={orgType === 'school' ? 'School Name' : 'Institute Name'}
-                                    value={instituteName}
-                                    onChange={(e) => setInstituteName(e.target.value)}
-                                    required
-                                    className="text-black"
-                                />
+                                <>
+                                    <div className="space-y-2">
+                                        <label className="block text-sm font-medium text-gray-700">Role</label>
+                                        <select
+                                            className="w-full bg-white border border-gray-300 rounded-md p-2 text-black focus:ring-blue-500 focus:border-blue-500"
+                                            value={managementTitle}
+                                            onChange={e => setManagementTitle(e.target.value)}
+                                        >
+                                            <option value="">-- Select Role --</option>
+                                            {orgType === 'school' ? (
+                                                ['Chairman', 'Director', 'Principal', 'Vice Principal', 'Manager', 'Administrator'].map(r => <option key={r} value={r}>{r}</option>)
+                                            ) : (
+                                                ['Chairman', 'Director', 'Dean', 'Registrar', 'Manager', 'Administrator'].map(r => <option key={r} value={r}>{r}</option>)
+                                            )}
+                                        </select>
+                                    </div>
+                                    <Input
+                                        id="instituteName"
+                                        label={orgType === 'school' ? 'School Name' : 'Institute Name'}
+                                        value={instituteName}
+                                        onChange={(e) => setInstituteName(e.target.value)}
+                                        required
+                                        className="text-black"
+                                    />
+                                </>
                             )}
 
                             {!isLogin && (activeRole === UserRole.Student || activeRole === UserRole.Parent) && (
@@ -901,6 +967,70 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                     }
                 }}
             />
+            {showGoogleLinkModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+                    <div className="bg-white rounded-lg p-6 shadow-xl max-w-sm w-full mx-4">
+                        <div className="text-center">
+                            <h3 className="text-xl font-bold text-gray-900 mb-2">🎉 Signup Successful!</h3>
+                            <p className="text-sm text-gray-500 mb-6">
+                                Would you like to link your <strong>Google Account</strong> to login easier next time?
+                            </p>
+                        </div>
+                        <div className="flex flex-col space-y-3">
+                            <button
+                                onClick={async () => {
+                                    /* Trigger Google Auth to Link */
+                                    const redirectTo = `${window.location.origin}/dashboard`;
+                                    await supabase.auth.signInWithOAuth({
+                                        provider: 'google',
+                                        options: { redirectTo, queryParams: { access_type: 'offline', prompt: 'consent' } }
+                                    });
+                                }}
+                                className="w-full inline-flex justify-center items-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700"
+                            >
+                                <svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 24 24"><path d="M12.48 10.92v3.28h7.84c-.24 1.84-.853 3.187-1.787 4.133-1.147 1.147-2.933 2.4-6.053 2.4-4.827 0-8.6-3.893-8.6-8.72s3.773-8.72 8.6-8.72c2.6 0 4.507 1.027 5.907 2.347l2.307-2.307C18.747 1.44 16.133 0 12.48 0 5.867 0 .533 5.333.533 12S5.867 24 12.48 24c3.44 0 6.013-1.133 8.053-3.24 2.08-2.16 2.72-5.333 2.72-8.213 0-.8-.08-1.56-.213-2.293h-10.56z" /></svg>
+                                Yes, Connect Google
+                            </button>
+                            <button
+                                onClick={() => navigateDashboard()}
+                                className="w-full inline-flex justify-center items-center py-2 px-4 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
+                            >
+                                No thanks, Go to Dashboard
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {popupError && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black bg-opacity-30 backdrop-blur-sm animate-in fade-in duration-200">
+                    <div className="bg-white border-l-4 border-red-500 rounded-lg p-6 shadow-2xl transform transition-all scale-100 max-w-sm w-full mx-4 animate-in zoom-in-95 duration-200">
+                        <div className="flex items-start">
+                            <div className="flex-shrink-0">
+                                <svg className="h-6 w-6 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                </svg>
+                            </div>
+                            <div className="ml-4">
+                                <h3 className="text-lg font-bold text-gray-900">Account Not Found</h3>
+                                <div className="mt-1">
+                                    <p className="text-sm text-gray-500">{popupError}</p>
+                                </div>
+                            </div>
+                            <div className="ml-auto pl-3">
+                                <button
+                                    onClick={() => setPopupError(null)}
+                                    className="bg-white rounded-md inline-flex text-gray-400 hover:text-gray-500 focus:outline-none"
+                                >
+                                    <span className="sr-only">Close</span>
+                                    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div >
     );
 };

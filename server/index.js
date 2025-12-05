@@ -11,6 +11,7 @@ const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
 const axios = require('axios');
 const { signupSchema, loginSchema } = require('./utils/validation');
+const { createClient } = require('@supabase/supabase-js');
 
 // Environment Validation
 const requiredEnv = ['DATABASE_URL', 'JWT_SECRET'];
@@ -1095,6 +1096,81 @@ app.post('/api/generate-study-schedule', authenticateToken, async (req, res, nex
     const schedule = await generateStudySchedule(marks, availableSlots);
     res.json({ success: true, schedule });
   } catch (e) {
+    next(e);
+  }
+});
+
+// Email Existence Check Endpoint
+app.post('/api/auth/check-email', async (req, res, next) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email is required' });
+
+    const result = await pool.query('SELECT 1 FROM users WHERE LOWER(email) = LOWER($1)', [email]);
+    const exists = result.rowCount > 0;
+
+    return res.json({ exists });
+  } catch (e) {
+    logger.error('Check email error', e);
+    next(e);
+  }
+});
+
+// Google Login Verification Endpoint
+app.post('/api/auth/google-login', async (req, res, next) => {
+  try {
+    const { accessToken } = req.body;
+    if (!accessToken) return res.status(400).json({ error: 'Missing access token' });
+
+    // Initialize Supabase Client
+    // We use the ANON key to verify the user token (getUser)
+    const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
+    const supabaseKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseKey) {
+      throw new Error('Supabase configuration missing');
+    }
+
+    const supabase = createClient(supabaseUrl, supabaseKey);
+
+    // Verify Token
+    const { data: { user }, error } = await supabase.auth.getUser(accessToken);
+
+    if (error || !user || !user.email) {
+      return res.status(401).json({ error: 'Invalid Google session' });
+    }
+
+    const email = user.email;
+
+    // Check if user exists in OUR database
+    const result = await pool.query('SELECT * FROM users WHERE LOWER(email) = LOWER($1)', [email]);
+    const existingUser = result.rows[0];
+
+    if (existingUser) {
+      // User exists - Log them in!
+
+      // Check 2FA if enabled (optional, skipping for Google for now unless you want strict 2FA on Google too)
+      // Standard practice: OAuth implies 2FA from provider, but if app has own 2FA, we might verify it.
+      // For now, bypass app 2FA for Google Login ease-of-use, unless strictly required.
+      // User said "no data will be asked", implying smooth login.
+
+      const token = generateAccessToken(existingUser);
+      const refreshToken = generateRefreshToken(existingUser);
+
+      res.cookie('accessToken', token, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', maxAge: 15 * 60 * 1000 });
+      res.cookie('refreshToken', refreshToken, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', maxAge: 7 * 24 * 60 * 60 * 1000 });
+
+      const userSafe = { ...existingUser };
+      delete userSafe.password_hash;
+      delete userSafe.two_factor_secret;
+
+      return res.json({ success: true, user: userSafe });
+    } else {
+      // User does NOT exist in our DB
+      return res.status(404).json({ error: 'Account not found. Please sign up first.' });
+    }
+  } catch (e) {
+    logger.error('Google login error', e);
     next(e);
   }
 });
