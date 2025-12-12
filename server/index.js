@@ -12,6 +12,7 @@ const cookieParser = require('cookie-parser');
 const axios = require('axios');
 const { signupSchema, loginSchema } = require('./utils/validation');
 const { createClient } = require('@supabase/supabase-js');
+const z = require('zod');
 
 // Environment Validation
 const requiredEnv = ['DATABASE_URL', 'JWT_SECRET'];
@@ -625,6 +626,42 @@ app.post('/api/reset-password', async (req, res, next) => {
   }
 });
 
+// Change Password (Authenticated)
+app.post('/api/auth/change-password', authenticateToken, async (req, res, next) => {
+  try {
+    const { oldPassword, newPassword } = req.body;
+    if (!oldPassword || !newPassword) return res.status(400).json({ error: 'Missing fields' });
+
+    const userId = req.user.id;
+    // Get current password hash
+    const r = await pool.query('SELECT password_hash FROM users WHERE id=$1', [userId]);
+    if (!r.rows.length) return res.status(404).json({ error: 'User not found' });
+
+    const hash = r.rows[0].password_hash;
+    const match = await bcrypt.compare(oldPassword, hash);
+    if (!match) return res.status(401).json({ error: 'Incorrect old password' });
+
+    // Validate Password Policy
+    const passValidation = z.string()
+      .min(8, 'Password must be at least 8 characters')
+      .regex(/[0-9]/, 'Password must contain at least one number')
+      .regex(/[^a-zA-Z0-9]/, 'Password must contain at least one special character')
+      .safeParse(newPassword);
+
+    if (!passValidation.success) {
+      const msg = (passValidation.error && passValidation.error.errors && passValidation.error.errors[0] && passValidation.error.errors[0].message) || 'Invalid password policy';
+      return res.status(400).json({ error: msg });
+    }
+
+    const newHash = await bcrypt.hash(newPassword, 10);
+    await pool.query('UPDATE users SET password_hash=$1 WHERE id=$2', [newHash, userId]);
+
+    res.json({ success: true, message: 'Password changed successfully' });
+  } catch (e) {
+    next(e);
+  }
+});
+
 // Org Code Request
 app.post('/api/org-code/request', authenticateToken, async (req, res, next) => {
   try {
@@ -788,6 +825,68 @@ app.get('/api/admin/backups', checkAdminAuth, async (req, res, next) => {
 
 // Persist a queued signup payload on the server so queued items survive browser
 // uninstall and can be managed by admins.
+
+// Google Login Verification Endpoint
+app.post('/api/auth/google-login', async (req, res, next) => {
+  try {
+    const { accessToken, email: providedEmail, role } = req.body || {};
+
+    let email = providedEmail;
+
+    // If accessToken provided, verify with Supabase to retrieve user's email
+    if (accessToken) {
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
+      const supabaseKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+      if (!supabaseUrl || !supabaseKey) {
+        throw new Error('Supabase configuration missing');
+      }
+      const supabase = createClient(supabaseUrl, supabaseKey);
+      const { data: { user }, error } = await supabase.auth.getUser(accessToken);
+      if (error || !user || !user.email) {
+        return res.status(401).json({ error: 'Invalid Google session' });
+      }
+      email = user.email;
+    }
+
+    if (!email) return res.status(400).json({ error: 'Email required' });
+
+    // Fetch all users in our DB that match this email
+    const query = 'SELECT * FROM users WHERE LOWER(email) = LOWER($1) ORDER BY role';
+    const r = await pool.query(query, [email]);
+    const rows = r.rows || [];
+
+    if (!rows.length) {
+      return res.status(404).json({ error: 'Account not found. Please sign up first.' });
+    }
+
+    // If role explicitly requested, strict match only.
+    if (role) {
+      const user = rows.find(u => u.role === role);
+      if (!user) {
+        return res.status(404).json({ error: 'User found but role mismatch' });
+      }
+
+      const token = generateAccessToken(user);
+      const refreshToken = generateRefreshToken(user);
+
+      res.cookie('accessToken', token, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', maxAge: 15 * 60 * 1000 });
+      res.cookie('refreshToken', refreshToken, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', maxAge: 7 * 24 * 60 * 60 * 1000 });
+
+      const userSafe = { ...user };
+      delete userSafe.password_hash;
+      delete userSafe.two_factor_secret;
+
+      return res.json({ success: true, user: userSafe });
+    }
+
+    // Multiple roles found: return summaries so client can ask user to choose
+    const summaries = rows.map(u => ({ id: u.id, role: u.role, name: u.name, email: u.email, extra: u.extra }));
+    return res.json({ success: true, users: summaries });
+  } catch (e) {
+    next(e);
+  }
+});
+
 // Mock SSO Endpoints
 app.get('/auth/google', (req, res) => {
   // Simulate Google Auth Redirect

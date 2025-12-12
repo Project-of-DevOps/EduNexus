@@ -12,6 +12,7 @@ interface AuthContextType {
   updateProfile: (patch: Partial<LoggedInUser>) => void;
   logout: () => void;
   signUpAsGuest: (role: UserRole) => void;
+  changePassword: (oldPw: string, newPw: string) => Promise<{ success: boolean; error?: string }>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -63,37 +64,80 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === 'SIGNED_IN' && session) {
         // If we already have a user logged in with the same email, do nothing (assumed synced)
-        // But if user is null or email mismatch, we verify with backend
-        if (user && user.email.toLowerCase() === (session.user.email || '').toLowerCase()) return;
+        // unless we want to re-verify role logic.
 
-        console.log('Supabase Signed In, verifying with backend...');
+        const storedRole = sessionStorage.getItem('edunexus:sso_role') as UserRole | null;
+        console.log('Supabase Signed In, verifying with backend. Role:', storedRole);
+
         const apiUrl = (import.meta as any).env?.VITE_API_URL || `http://${window.location.hostname}:4000`;
         try {
+          // Prefer sending accessToken for server-side verification
+          const accessToken = session.access_token || (session?.provider_token || null);
           const resp = await fetch(`${apiUrl}/api/auth/google-login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ accessToken: session.access_token })
+            body: JSON.stringify({ accessToken })
           });
 
           if (resp.ok) {
             const json = await resp.json();
+            // If server returned a finalized single user, use it
             if (json.success && json.user) {
-              // persist a local copy (without password) so the app can use it
               const serverUser = json.user;
               addUser({ ...serverUser, password: undefined } as any);
               setUser(serverUser as LoggedInUser);
+
+              // Immediately navigate to the appropriate dashboard for the user's role
+              try {
+                const role = (serverUser.role || '').toString();
+                let path = '/#/dashboard';
+                if (role === 'Management') path = '/#/dashboard/management';
+                else if (role === 'Teacher' || role === 'Dean') path = '/#/dashboard/teacher';
+                else if (role === 'Librarian') path = '/#/dashboard/librarian';
+                else if (role === 'Parent') path = '/#/dashboard/parent';
+                else if (role === 'Student') path = '/#/dashboard';
+
+                // Use full origin so SPA reloads correctly on hash change
+                window.location.href = window.location.origin + path;
+                return;
+              } catch (e) {
+                // Fallback: set success flag for login page to handle
+                try {
+                  const currentHash = window.location.hash || '#/login';
+                  const separator = currentHash.includes('?') ? '&' : '?';
+                  window.location.hash = `${currentHash}${separator}sso_success=true`;
+                  return;
+                } catch (ignore) {}
+              }
+            }
+
+            // If multiple roles found, instruct client to prompt user to choose
+            else if (json.success && Array.isArray(json.users) && json.users.length > 1) {
+              try {
+                sessionStorage.setItem('edunexus:sso_users', JSON.stringify(json.users));
+                const base = (window.location.hash || '#/login').split('?')[0];
+                window.location.hash = `${base}?sso_choose_roles=1`;
+                return;
+              } catch (e) {
+                console.warn('Failed to redirect to role chooser', e);
+              }
             }
           } else {
             console.warn('Google login failed with backend', resp.status);
-            // If account not found (404), force logout from Supabase to prevent stuck state
-            // and show alert (or let UI handle it)
             if (resp.status === 404) {
-              alert('Account not found. Please sign up first.');
-              await supabase.auth.signOut();
+              try { await supabase.auth.signOut(); } catch (e) { console.warn('signOut failed', e); }
+              try {
+                const baseHash = (window.location.hash || '#/login').split('?')[0];
+                // Use a clear indicator that account is not present
+                window.location.hash = `${baseHash}?sso_error=user_not_found`;
+                return;
+              } catch (e) { }
             }
           }
         } catch (e) {
           console.error('Failed to verify Google login', e);
+        } finally {
+          sessionStorage.removeItem('edunexus:sso_role');
         }
       }
     });
@@ -344,8 +388,36 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setUser(prev => prev ? ({ ...prev, ...patch } as LoggedInUser) : prev);
   };
 
+  const changePassword = async (oldPw: string, newPw: string) => {
+    if (!user) return { success: false, error: 'Not logged in' };
+
+    // Check if we are in local-only mode (guest) - mock success
+    if (user.id.startsWith('Student_') || user.id.startsWith('Teacher_') || user.id.startsWith('Management_')) {
+      // Just mock success for guests
+      return { success: true };
+    }
+
+    const apiUrl = (import.meta as any).env?.VITE_API_URL || `http://${window.location.hostname}:4000`;
+    try {
+      const res = await fetch(`${apiUrl}/api/auth/change-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Cookie': document.cookie }, // Ensure cookies are sent if using them, but also usually fetch sends cookies by default with credentials: include
+        credentials: 'include',
+        body: JSON.stringify({ oldPassword: oldPw, newPassword: newPw })
+      });
+      const json = await res.json();
+      if (res.ok) {
+        return { success: true };
+      } else {
+        return { success: false, error: json.error || 'Failed to change password' };
+      }
+    } catch (e) {
+      return { success: false, error: 'Network error' };
+    }
+  };
+
   return (
-    <AuthContext.Provider value={{ user, login, logout, signUpAsGuest, signUp, updateProfile }}>
+    <AuthContext.Provider value={{ user, login, logout, signUpAsGuest, signUp, updateProfile, changePassword }}>
       {children}
     </AuthContext.Provider>
   );
@@ -362,7 +434,8 @@ export const useAuth = () => {
       logout: () => { },
       signUpAsGuest: () => { },
       signUp: async () => false,
-      updateProfile: () => { }
+      updateProfile: () => { },
+      changePassword: async () => ({ success: false })
     } as AuthContextType;
   }
   return context;

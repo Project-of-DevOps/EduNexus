@@ -1,31 +1,23 @@
+import { TeacherTitle } from './types';
 
-import { UserRole } from './types';
-
-export const ROLES = [
-  { id: UserRole.Teacher, name: 'Teacher' },
-  { id: UserRole.Student, name: 'Student' },
-  { id: UserRole.Parent, name: 'Parent' },
-];
-
-export const ATTENDANCE_THRESHOLD = 75;
+export const ATTENDANCE_THRESHOLD = 75; // Percentage
 
 export const TEACHER_TITLES = [
-  { id: 'subject-teacher', name: 'Subject Teacher' },
-  { id: 'class-teacher', name: 'Class Teacher' },
-  { id: 'hod', name: 'HOD' },
-  { id: 'vice-principal', name: 'Vice Principal' },
-  { id: 'principal', name: 'Principal' },
-  { id: 'director', name: 'Director' },
-  { id: 'chairman', name: 'Chairman' },
+    { id: TeacherTitle.HOD, name: 'Head of Department' },
+    { id: TeacherTitle.Professor, name: 'Professor' },
+    { id: TeacherTitle.AssociateProfessor, name: 'Associate Professor' },
+    { id: TeacherTitle.AssistantProfessor, name: 'Assistant Professor' },
+    { id: TeacherTitle.Lecturer, name: 'Lecturer' },
+    { id: TeacherTitle.SubjectTeacher, name: 'Subject Teacher' },
+    { id: TeacherTitle.ClassTeacher, name: 'Class Teacher' }
 ];
 
-// Higher number => more powerful / higher rank
 export const TEACHER_TITLE_RANK: Record<string, number> = {
-  'subject-teacher': 1,
-  'class-teacher': 2,
-  'hod': 3,
-  'vice-principal': 4,
-  'principal': 5,
-  'director': 6,
-  'chairman': 7,
+    [TeacherTitle.HOD]: 10,
+    [TeacherTitle.Professor]: 8,
+    [TeacherTitle.AssociateProfessor]: 6,
+    [TeacherTitle.AssistantProfessor]: 4,
+    [TeacherTitle.Lecturer]: 2,
+    [TeacherTitle.SubjectTeacher]: 1,
+    [TeacherTitle.ClassTeacher]: 1
 };
