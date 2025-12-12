@@ -1,5 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 
+// ThemeContext: Manages dynamic theme switching and CSS variables
+
 // Color Palettes
 const palettes = {
   'Ocean Depth': {
