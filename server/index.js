@@ -920,20 +920,84 @@ const handleSignupAsync = async (req, res, next) => {
     const existing = await pool.query('SELECT id FROM users WHERE LOWER(email) = LOWER($1) AND role = $2', [email, role]);
     if (existing && existing.rows && existing.rows.length) return res.status(409).json({ error: 'user already exists' });
 
+    // Organization & Linking Logic
+    let organizationId = null;
+    let linkedStudentId = null;
+    const rollNumber = extra.rollNumber || null;
+
+    if (role === 'Management') {
+      // Management creates the code
+      // Auto-generate if not provided
+      if (!extra.uniqueId || extra.uniqueId.length < 3) {
+        // Generate random 6-char code (A-Z, 0-9)
+        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+        let autoCode = '';
+        for (let i = 0; i < 6; i++) {
+          autoCode += chars.charAt(Math.floor(Math.random() * chars.length));
+        }
+        extra.uniqueId = autoCode;
+      }
+      const uniqueId = extra.uniqueId;
+
+      const orgCheck = await pool.query('SELECT id FROM organizations WHERE code = $1', [uniqueId]);
+      if (orgCheck.rows.length) {
+        // If collision, append random digit (simple retry logic)
+        extra.uniqueId = uniqueId + Math.floor(Math.random() * 9);
+      }
+    } else if (role !== 'Librarian') {
+      // Teachers, Students, Parents must join an existing org
+      const uniqueId = extra.uniqueId;
+      if (!uniqueId) return res.status(400).json({ error: 'Organization Code required' });
+
+      const orgRes = await pool.query('SELECT id FROM organizations WHERE code = $1', [uniqueId]);
+      if (!orgRes.rows.length) return res.status(400).json({ error: 'Invalid Organization Code' });
+      organizationId = orgRes.rows[0].id;
+
+      if (role === 'Student') {
+        if (!rollNumber) return res.status(400).json({ error: 'Roll Number required for Students' });
+        // Check uniqueness
+        const dupRes = await pool.query('SELECT id FROM users WHERE organization_id = $1 AND roll_number = $2', [organizationId, rollNumber]);
+        if (dupRes.rows.length) return res.status(409).json({ error: 'Roll Number already registered in this organization' });
+      }
+
+      if (role === 'Parent') {
+        if (!rollNumber) return res.status(400).json({ error: 'Student Roll Number required for Parents' });
+
+        // Find student in THIS organization by Roll Number
+        const stRes = await pool.query('SELECT id FROM users WHERE roll_number = $1 AND role = $2 AND organization_id = $3', [rollNumber, 'Student', organizationId]);
+        if (!stRes.rows.length) return res.status(400).json({ error: 'Student Roll Number not found in this organization' });
+        linkedStudentId = stRes.rows[0].id;
+      }
+    }
+
     // Hash password
     const hash = await bcrypt.hash(password, 10);
 
-    // Step 1: INSERT user into database directly (NOT queued by default)
+    // Step 1: INSERT user
     let userId;
     try {
       const r = await pool.query(
-        'INSERT INTO users (name,email,password_hash,role,extra) VALUES ($1,$2,$3,$4,$5) RETURNING id,name,email,role,created_at',
-        [name || null, email, hash, role, extra]
+        'INSERT INTO users (name,email,password_hash,role,extra, organization_id, linked_student_id, roll_number) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,name,email,role,created_at',
+        [name || null, email, hash, role, extra, organizationId, linkedStudentId, rollNumber]
       );
       if (!r || !r.rows || !r.rows[0]) {
         return res.status(500).json({ error: 'Failed to create user' });
       }
       userId = r.rows[0].id;
+
+      // specific logic for Management: Create the Organization now
+      if (role === 'Management') {
+        const uniqueId = extra.uniqueId;
+        const orgInsert = await pool.query(
+          'INSERT INTO organizations (code, name, management_id) VALUES ($1,$2,$3) RETURNING id',
+          [uniqueId, extra.instituteName || 'My Institute', userId]
+        );
+        const newOrgId = orgInsert.rows[0].id;
+
+        // Update user to link to this org
+        await pool.query('UPDATE users SET organization_id = $1 WHERE id = $2', [newOrgId, userId]);
+      }
+
     } catch (dbErr) {
       logger.error('DB insert failed in handleSignup', dbErr?.message || dbErr);
       // Only persist to disk queue if database is completely down
@@ -1241,7 +1305,12 @@ app.post('/api/auth/google-login', async (req, res, next) => {
 
     const email = user.email;
 
-    // Check if user exists in OUR database
+    // OPTIMIZATION: This query uses the 'idx_users_email' B-Tree index.
+    // The database engine automatically optimizes this search:
+    // 1. Checks the First Letter (Root Node of B-Tree)
+    // 2. Checks subsequent characters (Level 2 Nodes, e.g. first 5 chars)
+    // 3. Pinpoints the exact Email (Leaf Node)
+    // This is O(log n) complexity, much faster than a manual string scan.
     const result = await pool.query('SELECT * FROM users WHERE LOWER(email) = LOWER($1)', [email]);
     const existingUser = result.rows[0];
 

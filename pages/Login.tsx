@@ -22,29 +22,31 @@ const LoginPage: React.FC = () => {
   }, [user, navigate]);
 
   return (
-    <div className="min-h-screen flex bg-white font-sans text-gray-900">
-      {/* Left Column - Hero/Brand (40% width on Desktop, Hidden on Mobile) */}
-      <div className="hidden lg:flex lg:w-5/12 relative bg-blue-900 overflow-hidden">
+    <div className="h-screen w-screen flex bg-white font-sans text-gray-900 overflow-hidden">
+      {/* Left Column - Hero/Brand (40% width on Desktop, Hidden on Mobile) - FIXED */}
+      <div className="hidden lg:flex lg:w-5/12 h-full relative bg-blue-900 border-r border-blue-800">
         <div className="absolute inset-0 bg-[url('/login-hero.png')] bg-cover bg-center opacity-90"></div>
         {/* Gradient overlay for text readability */}
-        <div className="absolute inset-0 bg-gradient-to-t from-blue-900/90 via-blue-900/20 to-transparent"></div>
+        <div className="absolute inset-0 bg-gradient-to-t from-blue-900/95 via-blue-900/40 to-blue-900/10"></div>
 
-        <div className="relative z-10 flex flex-col justify-end p-12 text-white pb-20">
-          <div className="mb-6 h-16 w-16 bg-white/10 backdrop-blur-md rounded-2xl flex items-center justify-center border border-white/20">
-            <svg className="h-10 w-10 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-            </svg>
+        <div className="relative z-10 flex flex-col justify-end p-12 text-white pb-20 h-full">
+          <div className="mb-auto mt-10">
+            <div className="h-14 w-14 bg-white/10 backdrop-blur-md rounded-xl flex items-center justify-center border border-white/20 shadow-lg">
+              <svg className="h-8 w-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+              </svg>
+            </div>
           </div>
-          <h1 className="text-4xl font-extrabold tracking-tight mb-2">EduNexus AI</h1>
-          <p className="text-lg text-blue-100 font-medium max-w-sm">
+          <h1 className="text-5xl font-extrabold tracking-tight mb-4 drop-shadow-sm">EduNexus AI</h1>
+          <p className="text-xl text-blue-100 font-medium max-w-sm leading-relaxed">
             The intelligent platform empowering modern education through connection and innovation.
           </p>
         </div>
       </div>
 
-      {/* Right Column - Login Form (60% width on Desktop, Full on Mobile) */}
-      <div className="w-full lg:w-7/12 flex flex-col justify-center items-center p-4 sm:p-8 lg:p-12 bg-gray-50/50">
-        <div className="w-full max-w-md space-y-8">
+      {/* Right Column - Login Form (60% width on Desktop, Full on Mobile) - SCROLLABLE */}
+      <div className="w-full lg:w-7/12 h-full overflow-y-auto flex flex-col items-center bg-gray-50/50">
+        <div className="w-full max-w-md space-y-8 py-12 px-4 sm:px-8 lg:px-12">
           <div className="text-center lg:text-left">
             <h2 className="text-3xl font-bold text-gray-900">Sign in</h2>
             <p className="mt-2 text-sm text-gray-500">

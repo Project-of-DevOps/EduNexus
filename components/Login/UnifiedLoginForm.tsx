@@ -11,10 +11,10 @@ import { supabase } from '../../services/supabaseClient';
 
 const roles = [
     { id: UserRole.Management, label: 'Management' },
+    { id: UserRole.Librarian, label: 'Librarian' },
     { id: UserRole.Teacher, label: 'Teacher' },
     { id: UserRole.Student, label: 'Student' },
     { id: UserRole.Parent, label: 'Parent' },
-    { id: UserRole.Librarian, label: 'Librarian' },
 ];
 
 const managementRoles = ['Chairman', 'Director', 'Principal', 'Vice Principal', 'Dean'];
@@ -34,9 +34,29 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
     const { login, signUp, signUpAsGuest } = useAuth();
     const { submitOrgJoinRequest, verifyTeacherCode, consumeTeacherCode, addUser } = useData();
 
-    const [activeRole, setActiveRole] = useState<UserRole>(defaultRole || UserRole.Management);
-    const [isLogin, setIsLogin] = useState(true);
+    const [activeRole, setActiveRole] = useState<UserRole | ''>(defaultRole || '');
+    // Initialize from URL param 'mode' if present, default to true (Login)
+    const [isLogin, setIsLogin] = useState(() => {
+        const params = new URLSearchParams(window.location.hash.split('?')[1] || window.location.search);
+        return params.get('mode') !== 'signup';
+    });
     const [isOffline, setIsOffline] = useState(!navigator.onLine);
+
+    // Sync URL with isLogin state
+    useEffect(() => {
+        const hash = window.location.hash || '';
+        const [path, qs] = hash.split('?');
+        const params = new URLSearchParams(qs || window.location.search);
+
+        if (isLogin) params.set('mode', 'login');
+        else params.set('mode', 'signup');
+
+        // Update URL without reloading
+        const newHash = `${path}?${params.toString()}`;
+        if (window.location.hash !== newHash) {
+            window.location.hash = newHash;
+        }
+    }, [isLogin]);
 
     // Form State
     const [email, setEmail] = useState(prefill?.email || '');
@@ -57,6 +77,8 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
     const [department, setDepartment] = useState('');
     const [currentSubject, setCurrentSubject] = useState('');
     const [currentClass, setCurrentClass] = useState('');
+    const [studentEmail, setStudentEmail] = useState('');
+    const [rollNumber, setRollNumber] = useState('');
     const [teachingAssignments, setTeachingAssignments] = useState<TeachingAssignment[]>([]);
     const [classInChargeId, setClassInChargeId] = useState('');
 
@@ -305,8 +327,8 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
         const pErr = validatePassword(password);
         if (pErr) return pErr;
 
-        // Unique ID required for Login (except Librarian) and Signup (except Librarian/StudentWithCode/ParentWithCode)
-        const needsUniqueId = activeRole !== UserRole.Librarian;
+        // Unique ID required for Login (except Librarian/Management) and Signup (except Librarian/Management/StudentWithCode/ParentWithCode)
+        const needsUniqueId = activeRole !== UserRole.Librarian && activeRole !== UserRole.Management;
         if (needsUniqueId && !uniqueId.trim() && isLogin) {
             return 'Unique ID is required.';
         }
@@ -315,6 +337,10 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
         }
 
         if (!isLogin && !name.trim()) return 'Full Name is required.';
+
+        if (!isLogin && (activeRole === UserRole.Parent || activeRole === UserRole.Student) && !rollNumber.trim()) {
+            return 'Roll Number is required.';
+        }
 
         // Teacher Validation
         if (!isLogin && activeRole === UserRole.Teacher) {
@@ -347,6 +373,7 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
 
     const handleVerifyOTP = async (otp: string) => {
         try {
+            if (!activeRole) throw new Error('Role mismatch');
             const extras: any = {};
             if (activeRole !== UserRole.Librarian) {
                 extras.uniqueId = uniqueId;
@@ -354,7 +381,7 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
             }
             extras.twoFactorToken = otp; // Pass OTP as token
 
-            const result = await login(email, password, activeRole, extras);
+            const result = await login(email, password, activeRole as UserRole, extras);
             if (result.success) {
                 setShowOTPModal(false);
                 if (rememberMe) {
@@ -489,7 +516,7 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
             const res = await fetch(`${apiUrl}/api/resend-otp`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email, role: activeRole, extras })
+                body: JSON.stringify({ email, role: activeRole || 'Management', extras })
             });
             const json = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(json.error || 'Failed to resend OTP');
@@ -502,6 +529,12 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setError('');
+
+        if (!activeRole) {
+            setError('Please select a role.');
+            return;
+        }
+
         const validationError = validate();
         if (validationError) {
             setError(validationError);
@@ -512,13 +545,12 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
         try {
             if (isLogin) {
                 const extras: any = {};
-                if (activeRole !== UserRole.Librarian) {
+                if (activeRole !== UserRole.Librarian && activeRole !== UserRole.Management) {
                     extras.uniqueId = uniqueId;
-                    extras.orgType = orgType;
                 }
                 extras.rememberMe = rememberMe;
 
-                const result = await login(email, password, activeRole, extras);
+                const result = await login(email, password, activeRole as UserRole, extras);
 
                 if (result.require2fa) {
                     setShowOTPModal(true);
@@ -541,7 +573,7 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
 
                 // Access Code Logic (Student/Parent)
                 if ((activeRole === UserRole.Student || activeRole === UserRole.Parent) && accessCode.trim()) {
-                    const result = submitOrgJoinRequest({ code: accessCode.trim(), name, email, role: activeRole, orgType });
+                    const result = submitOrgJoinRequest({ code: accessCode.trim(), name, email, role: activeRole as UserRole, orgType });
                     if (result.status === 'pending') {
                         // Use a success state instead of error
                         setSuccessMessage('Access request submitted! Waiting for management approval.');
@@ -572,9 +604,11 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                     if (classInChargeId) extras.classId = classInChargeId;
                 } else if (activeRole === UserRole.Management) {
                     extras.title = managementTitle;
+                } else if (activeRole === UserRole.Parent || activeRole === UserRole.Student) {
+                    extras.rollNumber = rollNumber;
                 }
 
-                const ok = await signUp(name, email, password, activeRole, extras);
+                const ok = await signUp(name, email, password, activeRole as UserRole, extras);
                 if (ok) {
                     if (activeRole === UserRole.Teacher) consumeTeacherCode(uniqueId);
                     // Instead of navigating immediately, ask to link Google
@@ -725,6 +759,12 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                                                 onClick={async () => {
                                                     // Use hash-based redirect so SPA (HashRouter) will load correctly
                                                     sessionStorage.setItem('edunexus:sso_role', activeRole);
+                                                    if (rememberMe) {
+                                                        localStorage.setItem('edunexus:remember_me_pref', 'true');
+                                                    } else {
+                                                        localStorage.removeItem('edunexus:remember_me_pref');
+                                                    }
+
                                                     const redirectTo = `${window.location.origin}/#/login`;
                                                     const { error } = await supabase.auth.signInWithOAuth({
                                                         provider: 'google',
@@ -854,6 +894,7 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                                         onChange={(e) => setActiveRole(e.target.value as UserRole)}
                                         className="block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md text-black"
                                     >
+                                        <option value="" disabled>Select your role</option>
                                         {roles.map((role) => (
                                             <option key={role.id} value={role.id}>
                                                 {role.label}
@@ -906,14 +947,15 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                                 )}
 
                                 {/* Unique ID (All except Librarian) */}
-                                {activeRole !== UserRole.Librarian && (
+                                {/* Organization Code (Signup Only) */}
+                                {!isLogin && activeRole !== UserRole.Librarian && activeRole !== UserRole.Management && (
                                     <Input
                                         id="uniqueId"
-                                        label="Unique ID"
+                                        label="Organization Code / Management Code"
                                         value={uniqueId}
                                         onChange={(e) => setUniqueId(e.target.value)}
-                                        placeholder={activeRole === UserRole.Management ? "Admin ID" : "ID / Code"}
-                                        required={isLogin || !accessCode}
+                                        placeholder="Enter Organization Code"
+                                        required={!accessCode}
                                         className="text-black"
                                     />
                                 )}
@@ -1035,6 +1077,51 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                                         placeholder="Enter join code"
                                         className="text-black"
                                     />
+                                )}
+
+                                {!isLogin && activeRole === UserRole.Student && (
+                                    <Input
+                                        id="rollNumber"
+                                        label="Roll Number"
+                                        value={rollNumber}
+                                        onChange={(e) => setRollNumber(e.target.value)}
+                                        placeholder="Enter your Class Roll Number"
+                                        required
+                                        className="text-black"
+                                    />
+                                )}
+
+                                {!isLogin && activeRole === UserRole.Parent && (
+                                    <Input
+                                        id="studentRollNumber"
+                                        label="Student Roll Number"
+                                        value={rollNumber}
+                                        onChange={(e) => setRollNumber(e.target.value)}
+                                        placeholder="Enter your child's Roll Number"
+                                        required
+                                        className="text-black"
+                                    />
+                                )}
+
+                                {/* Google Reset Option on Error */}
+                                {error && error.toLowerCase().includes('password') && (
+                                    <div className="mt-2 text-center">
+                                        <p className="text-xs text-red-600 mb-2">Forgot your password?</p>
+                                        <button
+                                            type="button"
+                                            onClick={async () => {
+                                                sessionStorage.setItem('edunexus:sso_role', activeRole);
+                                                const redirectTo = `${window.location.origin}/#/login?sso_success=true&provider=google`;
+                                                await supabase.auth.signInWithOAuth({
+                                                    provider: 'google',
+                                                    options: { redirectTo, queryParams: { access_type: 'offline', prompt: 'login' } }
+                                                });
+                                            }}
+                                            className="text-xs text-indigo-600 hover:text-indigo-500 underline"
+                                        >
+                                            Verify with Google to Reset
+                                        </button>
+                                    </div>
                                 )}
 
                                 <div className="relative">

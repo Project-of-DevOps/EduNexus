@@ -2,27 +2,19 @@
 import React from 'react';
 import { useTheme } from '../context/ThemeContext';
 
-const themes = [
-    { id: 'white', name: 'Light' },
-    { id: 'pink', name: 'Pink' },
-    { id: 'green', name: 'Green' },
-    { id: 'brown', name: 'Brown' },
-    { id: 'dark', name: 'Dark' },
-];
-
 const ThemeSwitcher: React.FC = () => {
-    const { theme, setTheme } = useTheme();
+    const { currentTheme, setTheme, availableThemes } = useTheme();
 
     return (
         <div>
             <select
-                value={theme}
+                value={currentTheme}
                 onChange={(e) => setTheme(e.target.value as any)}
                 className="bg-[rgb(var(--subtle-background-color))] border border-[rgb(var(--border-color))] text-[rgb(var(--text-color))] text-sm rounded-lg focus:ring-1 focus:ring-[rgb(var(--ring-color))] focus:border-[rgb(var(--primary-color))] block w-full p-1.5"
                 aria-label="Select theme"
             >
-                {themes.map((t) => (
-                    <option key={t.id} value={t.id}>{t.name}</option>
+                {availableThemes.map((t) => (
+                    <option key={t} value={t}>{t}</option>
                 ))}
             </select>
         </div>

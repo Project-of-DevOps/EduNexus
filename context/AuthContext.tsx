@@ -107,7 +107,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
                   const separator = currentHash.includes('?') ? '&' : '?';
                   window.location.hash = `${currentHash}${separator}sso_success=true`;
                   return;
-                } catch (ignore) {}
+                } catch (ignore) { }
               }
             }
 
@@ -138,6 +138,12 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           console.error('Failed to verify Google login', e);
         } finally {
           sessionStorage.removeItem('edunexus:sso_role');
+          // Handle Persistence based on pre-login preference
+          const rememberPref = localStorage.getItem('edunexus:remember_me_pref');
+          if (rememberPref === 'true') {
+            setRememberMe(true);
+            localStorage.removeItem('edunexus:remember_me_pref'); // Clear pref
+          }
         }
       }
     });
