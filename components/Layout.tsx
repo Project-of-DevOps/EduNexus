@@ -66,7 +66,7 @@ const Layout: React.FC<LayoutProps> = ({
   const [passwordError, setPasswordError] = useState('');
   const [passwordSuccess, setPasswordSuccess] = useState('');
 
-  const isManagement = user?.role === 'management';
+  const isManagement = user?.role === UserRole.Management;
   const switchButtonText = isManagement
     ? ((user as any).type === 'school' ? 'Switch to Institute' : 'Switch to School')
     : 'Switch Account';
@@ -278,7 +278,7 @@ const Layout: React.FC<LayoutProps> = ({
       <aside className={`fixed inset-y-0 left-0 z-30 w-64 bg-[rgb(var(--foreground-color))] shadow-xl transform ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} transition-transform duration-300 ease-in-out md:relative md:translate-x-0 md:flex md:flex-shrink-0`}>
         <div className="flex flex-col h-full">
           <div className="h-20 flex items-center justify-center bg-[rgba(var(--primary-color),0.05)]">
-            <h1 className="text-2xl font-bold text-[rgb(var(--primary-color))]">EduNexus AI</h1>
+            <h1 className="text-2xl font-extrabold text-[rgb(var(--highlight-color))]">EduNexus AI</h1>
           </div>
           <nav className="flex-1 px-2 py-4 space-y-2">
             {navItems.map((item) => (
@@ -299,15 +299,15 @@ const Layout: React.FC<LayoutProps> = ({
             ))}
           </nav>
           <div className="p-4 border-t border-[rgb(var(--border-color))] space-y-2">
-            <button onClick={() => setIsSwitchModalOpen(true)} className="flex items-center w-full px-4 py-2 text-left rounded-lg transition-colors duration-200 hover:bg-[rgba(var(--primary-color),0.1)] text-[rgb(var(--primary-color))]">
+            <button onClick={() => setIsSwitchModalOpen(true)} className="flex items-center w-full px-4 py-2 text-left rounded-lg transition-colors duration-200 hover:bg-[rgba(var(--primary-color),0.1)] text-[rgb(var(--text-color))] font-bold">
               <Icon path="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
               <span className="ml-3">{switchButtonText}</span>
             </button>
-            <button onClick={() => setIsChangePasswordModalOpen(true)} className="flex items-center w-full px-4 py-2 text-left rounded-lg transition-colors duration-200 hover:bg-[rgba(var(--primary-color),0.1)] text-[rgb(var(--primary-color))]">
+            <button onClick={() => setIsChangePasswordModalOpen(true)} className="flex items-center w-full px-4 py-2 text-left rounded-lg transition-colors duration-200 hover:bg-[rgba(var(--primary-color),0.1)] text-[rgb(var(--text-color))] font-bold">
               <Icon path="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
               <span className="ml-3">Change Password</span>
             </button>
-            <button onClick={handleLogout} className="flex items-center w-full px-4 py-2 text-left rounded-lg transition-colors duration-200 hover:bg-red-50 text-red-600">
+            <button onClick={handleLogout} className="flex items-center w-full px-4 py-2 text-left rounded-lg transition-colors duration-200 bg-red-600 hover:bg-red-700 text-white font-bold">
               <Icon path="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9" />
               <span className="ml-3">Logout</span>
             </button>
@@ -363,7 +363,7 @@ const Layout: React.FC<LayoutProps> = ({
                   })()
                 )}
               </div>
-              <p className="text-sm text-[rgb(var(--text-secondary-color))]">{roleName}</p>
+              <p className="text-sm text-[rgb(var(--text-color))] font-bold">{roleName}</p>
             </div>
             <button type="button" onClick={handleAvatarClick} className="relative inline-block cursor-pointer focus:outline-none focus:ring-2 focus:ring-[rgb(var(--primary-color))] rounded-full" aria-label="Open profile">
               {user?.avatarUrl ? (

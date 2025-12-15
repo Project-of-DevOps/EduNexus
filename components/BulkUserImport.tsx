@@ -47,9 +47,9 @@ const BulkUserImport: React.FC<BulkUserImportProps> = ({ onImport }) => {
     };
 
     return (
-        <div className="p-4 border border-dashed border-gray-300 rounded-lg bg-gray-50 mb-6">
-            <h4 className="font-bold text-gray-700 mb-2">Bulk Import Users</h4>
-            <p className="text-sm text-gray-500 mb-4">Upload a CSV or Excel file with columns: Name, Email, Role, Department (optional).</p>
+        <div className="p-4 border border-dashed border-[rgb(var(--border-color))] rounded-lg bg-[rgb(var(--subtle-background-color))] mb-6">
+            <h4 className="font-bold text-[rgb(var(--text-color))] mb-2 text-lg">Bulk Import Users</h4>
+            <p className="text-sm text-[rgb(var(--text-color))] font-medium mb-4">Upload a CSV or Excel file with columns: Name, Email, Role, Department (optional).</p>
 
             <div className="flex items-center gap-4">
                 <input
@@ -57,7 +57,7 @@ const BulkUserImport: React.FC<BulkUserImportProps> = ({ onImport }) => {
                     accept=".csv, .xlsx, .xls"
                     ref={fileInputRef}
                     onChange={handleFileChange}
-                    className="block w-full text-sm text-slate-500
+                    className="block w-full text-sm text-[rgb(var(--text-secondary-color))]
                         file:mr-4 file:py-2 file:px-4
                         file:rounded-full file:border-0
                         file:text-sm file:font-semibold

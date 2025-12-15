@@ -17,7 +17,7 @@ interface ActivityLogViewerProps {
 
 const ActivityLogViewer: React.FC<ActivityLogViewerProps> = ({ logs, isLoading = false }) => {
     if (isLoading) {
-        return <div className="p-4 text-center text-gray-500">Loading activity logs...</div>;
+        return <div className="p-4 text-center text-[rgb(var(--text-color))] font-bold">Loading activity logs...</div>;
     }
 
     return (
@@ -25,7 +25,7 @@ const ActivityLogViewer: React.FC<ActivityLogViewerProps> = ({ logs, isLoading =
             <h3 className="text-xl font-bold mb-4">Recent Activity</h3>
             <div className="space-y-4 max-h-96 overflow-y-auto pr-2">
                 {logs.length === 0 ? (
-                    <p className="text-gray-500 text-sm">No recent activity recorded.</p>
+                    <p className="text-[rgb(var(--highlight-color))] font-extrabold text-sm">No recent activity recorded.</p>
                 ) : (
                     logs.map(log => (
                         <div key={log.id} className="flex items-start gap-3 pb-3 border-b border-gray-100 last:border-0">

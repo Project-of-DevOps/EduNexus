@@ -70,12 +70,12 @@ export const ManagementSignupsContent: React.FC = () => {
 
       <Card className="p-4">
         <div className="space-y-2">
-          {pendingManagementSignups.length === 0 && <p className="text-gray-500">No queued signups.</p>}
+          {pendingManagementSignups.length === 0 && <p className="text-[rgb(var(--text-color))] font-bold italic">No queued signups.</p>}
           {pendingManagementSignups.map(p => (
             <div key={p.id} className="flex justify-between items-center p-2 bg-[rgb(var(--subtle-background-color))] rounded">
               <div>
                 <div className="font-semibold">{p.email}</div>
-                <div className="text-xs text-gray-400">Created: {new Date(p.createdAt).toLocaleString()} • Attempts: {p.attempts || 0} {p.error ? `• ${p.error}` : ''}</div>
+                <div className="text-xs text-[rgb(var(--text-color))] font-bold">Created: {new Date(p.createdAt).toLocaleString()} • Attempts: {p.attempts || 0} {p.error ? `• ${p.error}` : ''}</div>
               </div>
               <div className="flex gap-2">
                 <Button size="sm" variant="secondary" onClick={() => retryPendingSignup(p.id)}>Retry</Button>
@@ -94,14 +94,14 @@ export const ManagementSignupsContent: React.FC = () => {
       </div>
 
       <Card className="p-4">
-        {auditRows == null && <p className="text-gray-500">Click "Refresh Audit" to load recent signup sync events from the server.</p>}
-        {auditRows && auditRows.length === 0 && <p className="text-gray-500">No audit rows available.</p>}
+        {auditRows == null && <p className="text-[rgb(var(--text-color))] font-bold italic">Click "Refresh Audit" to load recent signup sync events from the server.</p>}
+        {auditRows && auditRows.length === 0 && <p className="text-[rgb(var(--text-color))] font-bold italic">No audit rows available.</p>}
         {auditRows && auditRows.length > 0 && (
           <div className="space-y-2">
             {auditRows.map((r: any) => (
               <div key={r.id || r.email} className="p-2 rounded bg-[rgb(var(--subtle-background-color))]">
                 <div className="font-mono text-sm">{r.email} — {r.status} — attempts: {r.attempts || 0}</div>
-                <div className="text-xs text-gray-400">{r.note || ''} • {r.created_at ? new Date(r.created_at).toLocaleString() : ''}</div>
+                <div className="text-xs text-[rgb(var(--text-color))] font-bold">{r.note || ''} • {r.created_at ? new Date(r.created_at).toLocaleString() : ''}</div>
               </div>
             ))}
           </div>
@@ -117,8 +117,8 @@ export const ManagementSignupsContent: React.FC = () => {
       </div>
 
       <Card className="p-4 mt-2">
-        {serverQueue == null && <p className="text-gray-500">Click "Refresh Queue" to load queued signups from the server.</p>}
-        {serverQueue && serverQueue.length === 0 && <p className="text-gray-500">No server queued signups.</p>}
+        {serverQueue == null && <p className="text-[rgb(var(--text-color))] font-bold italic">Click "Refresh Queue" to load queued signups from the server.</p>}
+        {serverQueue && serverQueue.length === 0 && <p className="text-[rgb(var(--text-color))] font-bold italic">No server queued signups.</p>}
         {serverQueue && serverQueue.length > 0 && (
           <div className="space-y-2">
             {serverQueue.map((row: any) => (
@@ -127,7 +127,7 @@ export const ManagementSignupsContent: React.FC = () => {
                   <input type="checkbox" checked={selectedIds.includes(row.id)} onChange={() => toggleSelect(row.id)} />
                   <div>
                     <div className="font-semibold">{row.email}</div>
-                    <div className="text-xs text-gray-400">{row.status} • attempts: {row.attempts || 0}</div>
+                    <div className="text-xs text-[rgb(var(--text-color))] font-bold">{row.status} • attempts: {row.attempts || 0}</div>
                   </div>
                 </div>
                 <div className="flex gap-2">

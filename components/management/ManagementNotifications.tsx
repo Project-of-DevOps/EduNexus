@@ -11,7 +11,8 @@ import Modal from '../ui/Modal';
 const ManagementNotifications: React.FC = () => {
     const { user } = useAuth();
     const { notifications, broadcastNotification, updateNotification, deleteNotification, markNotificationRead } = useData();
-    const { theme } = useTheme();
+    const { currentTheme } = useTheme();
+    const isDarkMode = currentTheme === 'Ocean Depth' || currentTheme === 'Iron Gunmetal';
 
     // Sending State
     const [message, setMessage] = useState('');
@@ -96,8 +97,8 @@ const ManagementNotifications: React.FC = () => {
             <div className="flex justify-between items-center">
                 <h3 className="text-xl font-bold">Notifications</h3>
                 <div className="flex gap-2">
-                    <button onClick={() => setViewMode('received')} className={`px-4 py-2 rounded ${viewMode === 'received' ? 'bg-blue-100 text-blue-800 font-bold' : 'text-gray-600'}`}>Inbox</button>
-                    <button onClick={() => setViewMode('sent')} className={`px-4 py-2 rounded ${viewMode === 'sent' ? 'bg-blue-100 text-blue-800 font-bold' : 'text-gray-600'}`}>Sent</button>
+                    <button onClick={() => setViewMode('received')} className={`px-4 py-2 rounded ${viewMode === 'received' ? 'bg-blue-100 text-blue-800 font-bold' : 'text-[rgb(var(--text-color))] font-bold'}`}>Inbox</button>
+                    <button onClick={() => setViewMode('sent')} className={`px-4 py-2 rounded ${viewMode === 'sent' ? 'bg-blue-100 text-blue-800 font-bold' : 'text-[rgb(var(--text-color))] font-bold'}`}>Sent</button>
                 </div>
             </div>
 
@@ -109,7 +110,7 @@ const ManagementNotifications: React.FC = () => {
                             <div>
                                 <label className="block text-sm font-medium mb-1">Message</label>
                                 <textarea
-                                    className={`w-full p-2 border rounded-md ${theme === 'dark' ? 'bg-[#1a1a1a] border-gray-700 text-white' : ''}`}
+                                    className={`w-full p-2 border rounded-md ${isDarkMode ? 'bg-[#1a1a1a] border-gray-700 text-white' : ''}`}
                                     rows={3}
                                     value={message}
                                     onChange={e => setMessage(e.target.value)}
@@ -120,7 +121,7 @@ const ManagementNotifications: React.FC = () => {
                                 <div>
                                     <label className="block text-sm font-medium mb-1">Send To (Role)</label>
                                     <select
-                                        className={`w-full p-2 border rounded-md ${theme === 'dark' ? 'bg-[#1a1a1a] border-gray-700 text-white' : ''}`}
+                                        className={`w-full p-2 border rounded-md ${isDarkMode ? 'bg-[#1a1a1a] border-gray-700 text-white' : ''}`}
                                         value={targetRole}
                                         onChange={e => setTargetRole(e.target.value as any)}
                                     >
@@ -134,7 +135,7 @@ const ManagementNotifications: React.FC = () => {
                                 <div>
                                     <label className="block text-sm font-medium mb-1">Category</label>
                                     <select
-                                        className={`w-full p-2 border rounded-md ${theme === 'dark' ? 'bg-[#1a1a1a] border-gray-700 text-white' : ''}`}
+                                        className={`w-full p-2 border rounded-md ${isDarkMode ? 'bg-[#1a1a1a] border-gray-700 text-white' : ''}`}
                                         value={category}
                                         onChange={e => setCategory(e.target.value as any)}
                                     >
@@ -152,7 +153,7 @@ const ManagementNotifications: React.FC = () => {
 
                     <div className="space-y-4">
                         <h4 className="text-lg font-bold">Sent History</h4>
-                        {uniqueSentNotifications.length === 0 && <p className="text-gray-500">No notifications sent.</p>}
+                        {uniqueSentNotifications.length === 0 && <p className="text-[rgb(var(--text-color))] font-bold italic">No notifications sent.</p>}
                         {uniqueSentNotifications.map(n => {
                             // Check if any message in this batch has been read
                             const isBatchRead = n.meta?.batchId
@@ -160,7 +161,7 @@ const ManagementNotifications: React.FC = () => {
                                 : n.read;
 
                             return (
-                                <div key={n.id} className={`p-4 rounded border relative ${theme === 'dark' ? 'bg-[#1a1a1a] border-gray-700' : 'bg-[rgb(var(--subtle-background-color))] border-[rgb(var(--border-color))]'}`}>
+                                <div key={n.id} className={`p-4 rounded border relative ${isDarkMode ? 'bg-[#1a1a1a] border-gray-700' : 'bg-[rgb(var(--subtle-background-color))] border-[rgb(var(--border-color))]'}`}>
                                     <div className="absolute top-4 right-4">
                                         {n.category === 'announcement' ? <AnnouncementIcon /> : <MessageIcon />}
                                     </div>
@@ -171,10 +172,10 @@ const ManagementNotifications: React.FC = () => {
                                             </span>
                                             <span className="text-xs text-gray-500">{new Date(n.createdAt).toLocaleString()}</span>
                                         </div>
-                                        <p className={`font-semibold mb-1 text-sm ${theme === 'dark' ? 'text-blue-700' : 'text-gray-600'}`}>
+                                        <p className={`font-semibold mb-1 text-sm ${isDarkMode ? 'text-blue-700' : 'text-gray-600'}`}>
                                             {n.senderRole || 'Me'} &rarr; {n.targetRole ? (n.targetRole === 'all' ? 'Everyone' : n.targetRole) : n.recipientEmail}
                                         </p>
-                                        <p className={`mt-1 ${theme === 'dark' ? 'text-blue-700' : 'text-gray-800'}`}>{n.message}</p>
+                                        <p className={`mt-1 ${isDarkMode ? 'text-blue-700' : 'text-gray-800'}`}>{n.message}</p>
                                         {isBatchRead && <p className="text-xs text-green-600 mt-1">Read by recipient(s)</p>}
                                     </div>
                                     <div className="mt-3 flex gap-2 justify-end">
@@ -193,9 +194,9 @@ const ManagementNotifications: React.FC = () => {
             {viewMode === 'received' && (
                 <Card className="p-6">
                     <div className="space-y-4">
-                        {myReceivedNotifications.length === 0 && <p className="text-gray-500">No notifications received.</p>}
+                        {myReceivedNotifications.length === 0 && <p className="text-[rgb(var(--text-color))] font-bold italic">No notifications received.</p>}
                         {myReceivedNotifications.map(n => (
-                            <div key={n.id} className={`p-4 rounded border relative ${theme === 'dark'
+                            <div key={n.id} className={`p-4 rounded border relative ${isDarkMode
                                 ? 'bg-[#1a1a1a] border-gray-700'
                                 : (n.read ? 'bg-[rgb(var(--subtle-background-color))] border-[rgb(var(--border-color))]' : 'bg-[rgb(var(--background-color))] border-[rgb(var(--primary-color))] shadow-sm')
                                 }`}>
@@ -208,7 +209,7 @@ const ManagementNotifications: React.FC = () => {
                                             {n.category === 'announcement' && <span className="text-xs font-bold bg-orange-100 text-orange-800 px-2 py-0.5 rounded">ANNOUNCEMENT</span>}
                                             <p className="text-xs text-[rgb(var(--text-secondary-color))]">{new Date(n.createdAt).toLocaleString()}</p>
                                         </div>
-                                        <p className={`${theme === 'dark'
+                                        <p className={`${isDarkMode
                                             ? 'text-blue-700'
                                             : (n.read ? 'text-[rgb(var(--text-secondary-color))]' : 'text-[rgb(var(--text-color))] font-semibold')
                                             }`}>{n.message}</p>
@@ -231,7 +232,7 @@ const ManagementNotifications: React.FC = () => {
                     <div>
                         <label className="block text-sm font-medium mb-1">Message</label>
                         <textarea
-                            className={`w-full p-2 border rounded-md ${theme === 'dark' ? 'bg-[#1a1a1a] border-gray-700 text-white' : ''}`}
+                            className={`w-full p-2 border rounded-md ${isDarkMode ? 'bg-[#1a1a1a] border-gray-700 text-white' : ''}`}
                             rows={3}
                             value={editMessage}
                             onChange={e => setEditMessage(e.target.value)}
@@ -240,7 +241,7 @@ const ManagementNotifications: React.FC = () => {
                     <div>
                         <label className="block text-sm font-medium mb-1">Category</label>
                         <select
-                            className={`w-full p-2 border rounded-md ${theme === 'dark' ? 'bg-[#1a1a1a] border-gray-700 text-white' : ''}`}
+                            className={`w-full p-2 border rounded-md ${isDarkMode ? 'bg-[#1a1a1a] border-gray-700 text-white' : ''}`}
                             value={editCategory}
                             onChange={e => setEditCategory(e.target.value as any)}
                         >

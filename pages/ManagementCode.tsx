@@ -33,11 +33,11 @@ const ManagementCode: React.FC = () => {
 
         <Card className="p-6">
           <h3 className="text-lg font-bold">Create Management Code</h3>
-          <p className="text-sm text-gray-500 mb-3">Create an institute or school code and send a confirmation link to the developer (storageeapp@gmail.com).</p>
+          <p className="text-sm text-[rgb(var(--text-color))] font-bold mb-3">Create an institute or school code and send a confirmation link to the developer (storageeapp@gmail.com).</p>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
             <div>
-              <label className="block text-sm text-gray-600 mb-1">Management email</label>
+              <label className="block text-sm text-[rgb(var(--text-color))] font-bold mb-1">Management email</label>
               <Input id="mgmt-code-email" label="" value={managementEmail} onChange={e => setManagementEmail(e.target.value)} />
             </div>
             <div className="flex gap-2 col-span-2">
@@ -70,12 +70,12 @@ const ManagementCode: React.FC = () => {
         <Card className="p-6">
           <h3 className="text-lg font-bold">Published Codes</h3>
           <div className="mt-4 space-y-2">
-            {orgCodes.length === 0 && <p className="text-gray-500">No codes published.</p>}
+            {orgCodes.length === 0 && <p className="text-[rgb(var(--text-color))] font-bold italic">No codes published.</p>}
             {orgCodes.map(c => (
               <div key={c.id} className="p-3 bg-[rgb(var(--subtle-background-color))] rounded flex justify-between items-center">
                 <div>
                   <div className="font-mono text-lg font-bold">{c.code}</div>
-                  <div className="text-xs text-gray-400">{c.orgType} • {c.instituteId || '—'} • {new Date(c.createdAt).toLocaleString()}</div>
+                  <div className="text-xs text-[rgb(var(--text-color))] font-bold">{c.orgType} • {c.instituteId || '—'} • {new Date(c.createdAt).toLocaleString()}</div>
                 </div>
                 <div className="flex gap-2">
                   <Button size="sm" variant="secondary" onClick={() => { navigator.clipboard.writeText(c.code); alert('Copied!'); }}>Copy</Button>
@@ -89,7 +89,7 @@ const ManagementCode: React.FC = () => {
           <h3 className="text-lg font-bold">Pending Developer Requests</h3>
           <p className="text-sm text-gray-500 mb-3">These are the requests waiting for a developer to confirm (the developer receives a link to confirm).</p>
           <div className="space-y-2">
-            {pendingCodeRequests.length === 0 && <p className="text-gray-500">None</p>}
+            {pendingCodeRequests.length === 0 && <p className="text-[rgb(var(--text-color))] font-bold italic">No pending requests for this institute.</p>}
             {pendingCodeRequests.map(p => (
               <div key={p.id} className="p-3 bg-[rgb(var(--subtle-background-color))] rounded flex justify-between items-center">
                 <div>

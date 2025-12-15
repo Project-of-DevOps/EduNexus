@@ -6,7 +6,10 @@
   "scripts": {
     "worker:once": "node server/outboxWorker.js --once",
     "worker:run": "node server/outboxWorker.js",
+    "server": "node server/index.js",
+    "client": "vite",
     "dev": "vite",
+    "dev:all": "concurrently \"npm run server\" \"npm run client\" \"python server/python_service/main.py\"",
     "test": "vitest",
     "test:ui": "vitest --ui",
     "build": "vite build",
@@ -34,6 +37,7 @@
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.0.0",
+    "concurrently": "^9.2.1",
     "jsdom": "^22.1.0",
     "jsonwebtoken": "^9.0.2",
     "pg": "^8.11.1",

@@ -1,49 +1,54 @@
-const { Client } = require('pg');
+const { Pool } = require('pg');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
 // Robust configuration for Supabase
-const getClient = () => {
+const createPool = () => {
     // Check if DATABASE_URL is present
     if (!process.env.DATABASE_URL) {
         console.error('DATABASE_URL is missing!');
-        // Fallback or error
     }
 
     try {
-        const url = new URL(process.env.DATABASE_URL);
-        const clientConfig = {
-            user: url.username,
-            password: url.password,
-            host: url.hostname,
-            port: url.port,
-            database: url.pathname.split('/')[1],
-            // ssl: { rejectUnauthorized: false }, // Commented out for local dev
-            connectionTimeoutMillis: 30000
+        const connectionString = process.env.DATABASE_URL;
+        // Use Pool for better connection management in a server environment
+        const poolConfig = {
+            connectionString,
+            connectionTimeoutMillis: 30000,
+            ssl: { rejectUnauthorized: false } // Required for Supabase usually, verify if problematic locally
         };
-        return new Client(clientConfig);
+        // If specific parsing is needed, we can do it, but connectionString usually suffices for pg
+        return new Pool(poolConfig);
     } catch (e) {
-        console.error('Invalid DATABASE_URL', e);
-        return new Client({ connectionString: process.env.DATABASE_URL });
+        console.error('Invalid DATABASE_URL configuration', e);
+        return new Pool({ connectionString: process.env.DATABASE_URL });
     }
 };
 
+const pool = createPool();
+
+// Handle unexpected client errors to prevent unhandled 'error' events crashing the process.
+if (pool && typeof pool.on === 'function') {
+    pool.on('error', (err) => {
+        console.error('Unexpected DB client error', err?.message || err);
+        // Use process.stderr to ensure visibility in hosting environments
+        try { process.stderr.write(`DB client error: ${String(err?.message || err)}\n`); } catch (e) { /* ignore */ }
+    });
+}
+
 // Helper for single query execution
 const query = async (text, params) => {
-    const client = getClient();
     try {
-        await client.connect();
-        const res = await client.query(text, params);
+        const res = await pool.query(text, params);
         return res;
     } catch (err) {
         console.error('Database Query Error:', err);
         throw err;
-    } finally {
-        await client.end();
     }
 };
 
 module.exports = {
+    pool,
     users: {
         // Create user
         create: async (user) => {

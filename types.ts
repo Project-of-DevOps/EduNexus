@@ -35,6 +35,7 @@ export interface LoggedInUser {
   title?: TeacherTitle;
   reportingToId?: string;
   subjects?: string[];
+  avatarUrl?: string;
 }
 
 export interface Teacher extends LoggedInUser {
@@ -123,6 +124,8 @@ export interface DamageReport { id: string; bookId: string; reporterId?: string;
 
 export interface TeacherExtended extends Teacher {
   subjects?: string[];
+  orgType?: 'school' | 'institute';
+  instituteId?: string;
 }
 
 export interface StudySession { id?: string; topic?: string; durationMin?: number; notes?: string }

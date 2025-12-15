@@ -36,15 +36,30 @@ const app = express();
 app.use(helmet());
 
 // CORS Configuration
-const allowedOrigins = [process.env.VITE_API_URL || 'http://localhost:5173', 'http://localhost:3000'];
+// Dynamic CORS Configuration
 app.use(cors({
   origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
-    if (allowedOrigins.indexOf(origin) === -1) {
-      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+
+    // Dynamic allow list
+    const allowedPatterns = [
+      /^http:\/\/localhost:\d+$/,
+      /^http:\/\/127\.0\.0\.1:\d+$/,
+      /^http:\/\/192\.168\.\d+\.\d+:\d+$/,
+      /^http:\/\/172\.\d+\.\d+\.\d+:\d+$/ // 172.x.x.x
+    ];
+
+    const isAllowed = allowedPatterns.some(pattern => pattern.test(origin)) ||
+      origin === process.env.VITE_API_URL ||
+      origin === 'http://localhost:5173';
+
+    if (isAllowed) {
+      return callback(null, true);
+    } else {
+      const msg = `The CORS policy for this site does not allow access from the specified Origin: ${origin}`;
       return callback(new Error(msg), false);
     }
-    return callback(null, true);
   },
   credentials: true
 }));
@@ -217,7 +232,7 @@ const appendInbound = (obj) => {
     writeJsonFile(file, cur);
     return entry;
   } catch (e) {
-    logger.warn('appendInbound failed', e?.message || e);
+    logger.warn('appendInbound failed', { error: String(e?.message || e) });
     return null;
   }
 };
@@ -250,7 +265,7 @@ const appendSignupQueueDisk = async (signupData) => {
         logger.warn('Failed uploading signup queue backup to GCS', err?.message || err);
       });
     } catch (err) {
-      logger.warn('Cloud upload attempt failed (skipped)', err?.message || err);
+      logger.warn('Cloud upload attempt failed (skipped)', { error: String(err?.message || err) });
     }
 
     return entry;
@@ -268,6 +283,19 @@ app.get('/api/admin/inbound', checkAdminAuth, (req, res) => {
     res.json({ success: true, inbound });
   } catch (e) {
     res.status(500).json({ error: 'failed' });
+  }
+});
+
+// Admin: fetch a user by email for debugging (requires admin key)
+app.get('/api/admin/user', checkAdminAuth, async (req, res, next) => {
+  try {
+    const email = req.query.email ? String(req.query.email) : null;
+    if (!email) return res.status(400).json({ error: 'email required' });
+    const r = await pool.query('SELECT id,name,email,role,extra,created_at,organization_id,linked_student_id,roll_number FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1', [email]);
+    if (!r.rows.length) return res.status(404).json({ error: 'not found' });
+    res.json({ success: true, user: r.rows[0] });
+  } catch (e) {
+    next(e);
   }
 });
 
@@ -307,7 +335,7 @@ const processDiskQueuesOnStartup = async () => {
   try {
     const signupQueue = readJsonFile(QUEUE_FILE);
     if (Array.isArray(signupQueue) && signupQueue.length) {
-      logger.info('Processing disk signup queue', signupQueue.length);
+      logger.info('Processing disk signup queue', { count: signupQueue.length });
       for (const item of signupQueue.slice()) {
         try {
           // Attempt to insert the queued signup into the database
@@ -334,12 +362,49 @@ const processDiskQueuesOnStartup = async () => {
             }
           }
         } catch (e) {
-          item.attempts = (item.attempts || 0) + 1;
-          logger.warn('Failed to recover queued signup, attempts:', item.attempts, item.email, e?.message);
-          // Keep it queued for next retry if attempts < 10
-          if (item.attempts >= 10) {
+          const errMsg = String(e?.message || e);
+          // If the error indicates a duplicate key / unique constraint, mark as failed immediately
+          if (errMsg.toLowerCase().includes('duplicate') || errMsg.toLowerCase().includes('unique') || errMsg.toLowerCase().includes('already exists') || errMsg.toLowerCase().includes('users_email_key')) {
             item.status = 'failed';
-            logger.error('Giving up on signup queue item after 10 attempts:', item.email);
+            logger.warn('Dropping queued signup - duplicate user exists', { email: item.email, error: errMsg });
+            try {
+              await pool.query('INSERT INTO signup_syncs (email, status, attempts, note) VALUES ($1,$2,$3,$4)', [item.email, 'failed', (item.attempts || 0) + 1, 'duplicate user exists, dropped from disk queue']);
+            } catch (auditErr) {
+              logger.warn('Failed to record signup sync audit for duplicate', { email: item.email, error: String(auditErr?.message || auditErr) });
+            }
+            // Notify admin that a queued signup was dropped due to duplicate (persist to outbox first)
+            try {
+              const adminEmail = process.env.ADMIN_ALERT_EMAIL || process.env.SMTP_FROM;
+              if (adminEmail) {
+                const subject = `Dropped queued signup: duplicate user ${item.email}`;
+                const body = `A queued signup saved to disk was dropped because a user with email ${item.email} already exists in the database.\n\nQueued item id: ${item.id}\nAttempts: ${item.attempts || 0}\nTime: ${new Date().toISOString()}`;
+                try {
+                  appendOutbox({ to: adminEmail, subject, text: body });
+                  logger.info('Admin notification appended to outbox for dropped signup', { email: item.email });
+                } catch (appendErr) {
+                  logger.warn('Failed to append admin notification to outbox', { email: item.email, error: String(appendErr?.message || appendErr) });
+                }
+
+                (async () => {
+                  try {
+                    const sent = await sendEmail(adminEmail, subject, body);
+                    if (sent) logger.info('Admin notified of dropped queued signup (immediate send)', { email: item.email });
+                  } catch (sendErr) {
+                    logger.warn('Immediate admin notification failed (message persisted in outbox)', { email: item.email, error: String(sendErr?.message || sendErr) });
+                  }
+                })();
+              }
+            } catch (notifyErr) {
+              logger.warn('Error while attempting to notify admin about dropped queued signup', { email: item.email, error: String(notifyErr?.message || notifyErr) });
+            }
+          } else {
+            item.attempts = (item.attempts || 0) + 1;
+            logger.warn('Failed to recover queued signup', { attempts: item.attempts, email: item.email, error: errMsg });
+            // Keep it queued for next retry if attempts < 10
+            if (item.attempts >= 10) {
+              item.status = 'failed';
+              logger.error('Giving up on signup queue item after 10 attempts', { email: item.email });
+            }
           }
         }
       }
@@ -679,42 +744,21 @@ app.post('/api/org-code/request', authenticateToken, async (req, res, next) => {
     } catch (e) {
       logger.warn('dup check failed for org-code request', e?.message || e);
     }
+
+    await pool.query('INSERT INTO org_code_requests (management_email, org_type, institute_id, token) VALUES ($1, $2, $3, $4)', [managementEmail, orgType, instituteId, token]);
+    const confirmLink = `${process.env.VITE_API_URL || 'http://localhost:4000'}/api/org-code/confirm/${token}`;
+    const rejectLink = `${process.env.VITE_API_URL || 'http://localhost:4000'}/api/org-code/reject/${token}`;
+    // notify developer and set reply-to so developer can reply directly to the management email
+    await sendEmail('storageeapp@gmail.com', 'New Organization Code Request', `Request from: ${managementEmail}\nType: ${orgType}\nInstitute ID: ${instituteId}\n\nApprove: ${confirmLink}\nReject: ${rejectLink}`, { replyTo: managementEmail });
+
+    // Send an immediate acknowledgement to the management requester.
     try {
-      await pool.query('INSERT INTO org_code_requests (management_email, org_type, institute_id, token) VALUES ($1, $2, $3, $4)', [managementEmail, orgType, instituteId, token]);
-      const confirmLink = `${process.env.VITE_API_URL || 'http://localhost:4000'}/api/org-code/confirm/${token}`;
-      const rejectLink = `${process.env.VITE_API_URL || 'http://localhost:4000'}/api/org-code/reject/${token}`;
-      // notify developer and set reply-to so developer can reply directly to the management email
-      await sendEmail('storageeapp@gmail.com', 'New Organization Code Request', `Request from: ${managementEmail}\nType: ${orgType}\nInstitute ID: ${instituteId}\n\nApprove: ${confirmLink}\nReject: ${rejectLink}`, { replyTo: managementEmail });
-
-      // Send an immediate acknowledgement to the management requester.
-      try {
-        await sendEmail(managementEmail, 'Organization Code Request Received', `Thanks — we've received your request for a ${orgType} organization code. A developer will review and confirm or reject your request shortly.`);
-      } catch (err) {
-        // Persist acknowledgment to outbox for later delivery
-        appendOutbox({ to: managementEmail, subject: 'Organization Code Request Received', text: `Thanks — we've received your request for a ${orgType} organization code. A developer will review and confirm or reject your request shortly.` });
-      }
-
-      res.json({ success: true, token, message: 'Request submitted. Waiting for developer approval.' });
-    } catch (dbErr) {
-      logger.warn('DB unavailable when creating org_code_request; persisting to disk', dbErr?.message || dbErr);
-      // fallback: persist to disk so request isn't lost
-      const diskFile = path.join(DATA_DIR, 'org_code_requests_disk.json');
-      const cur = readJsonFile(diskFile);
-      const entry = { id: `disk_${Date.now()}`, managementEmail, orgType, instituteId, token, status: 'pending', createdAt: new Date().toISOString() };
-      cur.unshift(entry);
-      writeJsonFile(diskFile, cur);
-
-      const confirmLink = `${process.env.VITE_API_URL || 'http://localhost:4000'}/api/org-code/confirm/${token}`;
-      const rejectLink = `${process.env.VITE_API_URL || 'http://localhost:4000'}/api/org-code/reject/${token}`;
-      // send developer notification to outbox so developer can confirm later
-      appendOutbox({ to: 'storageeapp@gmail.com', subject: 'New Organization Code Request (queued)', text: `Request from: ${managementEmail}\nType: ${orgType}\nInstitute ID: ${instituteId}\n\nApprove: ${confirmLink}\nReject: ${rejectLink}`, replyTo: managementEmail });
-
-      // Also notify the management user that their request was received but queued
-      appendOutbox({ to: managementEmail, subject: 'Organization Code Request Received (queued)', text: `Thanks — your request for a ${orgType} organization code was received but the server is currently unable to persist data; it has been queued and a developer will be notified once the system is available.` });
-
-      // Always return the token so the client can reference/receive it even when queued
-      res.json({ success: true, queued: true, token, message: 'Request queued due to server unavailability. Developer will be notified.' });
+      await sendEmail(managementEmail, 'Organization Code Request Received', `Thanks — we've received your request for a ${orgType} organization code. A developer will review and confirm or reject your request shortly.`);
+    } catch (err) {
+      // Persist acknowledgment to outbox for later delivery
+      appendOutbox({ to: managementEmail, subject: 'Organization Code Request Received', text: `Thanks — we've received your request for a ${orgType} organization code. A developer will review and confirm or reject your request shortly.` });
     }
+
   } catch (e) {
     next(e);
   }
@@ -740,23 +784,7 @@ app.get('/api/org-code/confirm/:token', async (req, res, next) => {
 
     res.send('Request confirmed. Email sent to user.');
   } catch (e) {
-    // Try to fallback to disk-based queue
-    try {
-      const token = req.params.token;
-      const diskFile = path.join(DATA_DIR, 'org_code_requests_disk.json');
-      const list = readJsonFile(diskFile);
-      const idx = list.findIndex(x => x.token === token && x.status === 'pending');
-      if (idx < 0) return next(e);
-      const entry = list[idx];
-      // mark confirmed locally and remove from disk queue
-      list.splice(idx, 1);
-      writeJsonFile(diskFile, list);
-      // create an email to management to be sent by outbox processing
-      appendOutbox({ to: entry.managementEmail, subject: 'Organization Code Approved', text: `Your request for ${entry.orgType} has been approved. Your code will be provided by an admin shortly.` });
-      return res.send('Request confirmed locally; notification queued for delivery.');
-    } catch (innerErr) {
-      return next(e);
-    }
+    next(e);
   }
 });
 
@@ -775,36 +803,8 @@ app.post('/api/org-code/reject/:token', async (req, res, next) => {
 
       await sendEmail(management_email, 'Organization Code Request Rejected', `Your request for ${org_type}${institute_id ? ' (' + institute_id + ')' : ''} was rejected by the developer.${reason ? '\n\nReason: ' + reason : ''}`);
 
-      res.json({ success: true });
-    } catch (dbErr) {
-      // Fallback: try to reject a pending request stored on disk
-      try {
-        const diskFile = path.join(DATA_DIR, 'org_code_requests_disk.json');
-        const list = readJsonFile(diskFile);
-        const idx = list.findIndex(x => x.token === token && x.status === 'pending');
-        if (idx < 0) throw dbErr; // Not found on disk either, rethrow original error
-
-        const entry = list[idx];
-        // Remove from disk queue (effectively rejecting it from the pending list)
-        // Alternatively, we could mark it as rejected in the file if we wanted to keep history, 
-        // but removing it prevents it from being processed later. 
-        // However, to be consistent with "DB should store data", we might want to keep it?
-        // The worker only processes 'pending' items. If we just remove it, it's gone.
-        // Let's just remove it from the queue and notify.
-        list.splice(idx, 1);
-        writeJsonFile(diskFile, list);
-
-        // Queue rejection email
-        appendOutbox({
-          to: entry.managementEmail,
-          subject: 'Organization Code Request Rejected',
-          text: `Your request for ${entry.orgType}${entry.instituteId ? ' (' + entry.instituteId + ')' : ''} was rejected by the developer.${reason ? '\n\nReason: ' + reason : ''}`
-        });
-
-        return res.json({ success: true, message: 'Request rejected locally; notification queued.' });
-      } catch (innerErr) {
-        next(dbErr);
-      }
+    } catch (e) {
+      next(e);
     }
   } catch (e) {
     next(e);
@@ -904,10 +904,17 @@ app.get('/auth/microsoft', (req, res) => {
 // Magic Link Request
 const handleSignupAsync = async (req, res, next) => {
   try {
-    // Validate Input
-    const validation = signupSchema.safeParse(req.body);
-    if (!validation.success) {
-      const msg = (validation.error && validation.error.errors && validation.error.errors[0] && validation.error.errors[0].message) || 'Invalid request';
+    // Validate Input (guard against runtime schema errors)
+    let validation;
+    try {
+      validation = signupSchema.safeParse(req.body);
+    } catch (vErr) {
+      // Zod runtime error (unexpected). Log the body for debugging and return a safe message.
+      logger.error('Signup validation runtime error', { error: String(vErr?.message || vErr), body: req.body });
+      return res.status(400).json({ error: 'Invalid signup payload' });
+    }
+    if (!validation || !validation.success) {
+      const msg = (validation && validation.error && validation.error.errors && validation.error.errors[0] && validation.error.errors[0].message) || 'Invalid request';
       return res.status(400).json({ error: msg });
     }
 
@@ -1070,6 +1077,7 @@ const handleSignupAsync = async (req, res, next) => {
     next(err);
   }
 };
+app.post('/api/signup', handleSignupAsync);
 
 // GET all pending signups from database queue
 app.get('/api/queue-signups', checkAdminAuth, async (req, res, next) => {
@@ -1354,7 +1362,7 @@ app.post('/api/login', async (req, res, next) => {
 
     const { email, password, role = 'Management', extra, twoFactorToken } = req.body;
 
-    const r = await pool.query('SELECT id,name,email,password_hash,role,extra,created_at,two_factor_secret,is_verified FROM users WHERE email=$1 AND role=$2', [email, role]);
+    const r = await pool.query('SELECT id,name,email,password_hash,role,extra,created_at,two_factor_secret,is_verified FROM users WHERE LOWER(email)=LOWER($1) AND role=$2', [email, role]);
     if (!r.rows.length) return res.status(404).json({ error: 'Unregistered email' });
 
     const u = r.rows[0];

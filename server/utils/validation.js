@@ -11,7 +11,7 @@ const signupSchema = z.object({
     email: z.string().email('Invalid email address'),
     password: passwordSchema,
     role: z.enum(['Management', 'Teacher', 'Student', 'Parent']),
-    extra: z.record(z.any()).optional(),
+    extra: z.any().optional(),
     _queued: z.boolean().optional()
 });
 

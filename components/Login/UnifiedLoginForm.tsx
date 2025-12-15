@@ -24,7 +24,8 @@ const teachingRoles = [
     'Class Teacher', 'Class Teacher (Advisor)'
 ];
 const classTeacherRoles = ['Class Teacher', 'Class Teacher (Advisor)'];
-const departments = ['CSE', 'ECE', 'Mechanical', 'Science', 'Mathematics', 'Accounts', 'English', 'Social Studies'];
+
+
 
 type Prefill = { email?: string; uniqueId?: string; orgType?: 'school' | 'institute' };
 
@@ -74,7 +75,7 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
     // Teacher Specific State
     const [teacherTitle, setTeacherTitle] = useState('');
     const [managementTitle, setManagementTitle] = useState('');
-    const [department, setDepartment] = useState('');
+
     const [currentSubject, setCurrentSubject] = useState('');
     const [currentClass, setCurrentClass] = useState('');
     const [studentEmail, setStudentEmail] = useState('');
@@ -261,7 +262,7 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                     if (!json.exists) {
                         setLoading(false);
                         // Show centered popup instead of inline error
-                        setPopupError('User not registered , Consider regestring before sing-in');
+                        setPopupError('User not registered , Consider registering before sign-in');
                         setTimeout(() => setPopupError(null), 4000);
                         return;
                     }
@@ -346,7 +347,7 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
         if (!isLogin && activeRole === UserRole.Teacher) {
             if (!teacherTitle) return 'Role is required.';
             if (isTeachingRole(teacherTitle)) {
-                if (!department) return 'Department is required.';
+
                 if (teachingAssignments.length === 0) return 'At least one teaching assignment is required.';
             }
             if (isClassTeacher(teacherTitle) && !classInChargeId) {
@@ -594,11 +595,10 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                     }
                 }
 
-                const extras: any = { uniqueId, instituteName, orgType };
+                const extras: any = { uniqueId, orgType };
 
                 if (activeRole === UserRole.Teacher) {
                     extras.title = teacherTitle;
-                    extras.department = department;
                     extras.teachingAssignments = teachingAssignments;
                     extras.teacherType = orgType === 'institute' ? 'college' : 'school'; // Map back if needed or keep consistent
                     if (classInChargeId) extras.classId = classInChargeId;
@@ -625,7 +625,14 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
     };
 
     return (
-        <div className="w-full max-w-md mx-auto select-none" onCopy={(e) => {
+        <div className="w-full max-w-md mx-auto select-none" style={{
+            '--text-color': '0 0 0',
+            '--text-secondary-color': '107 114 128',
+            '--background-color': '255 255 255',
+            '--subtle-background-color': '255 255 255', // Force white options
+            '--input-bg': '255 255 255',
+            '--border-color': '209 213 219' // Gray-300
+        } as React.CSSProperties} onCopy={(e) => {
             // Only allow copying from input fields
             const selection = window.getSelection();
             const target = e.target as HTMLElement;
@@ -715,8 +722,8 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                         </button>
                     </div>
 
-                    {/* Scrollable Container for Consistent Height - REMOVED SCROLL */}
-                    <div className="pr-1">
+                    {/* Scrollable Container for Consistent Height - SCROLL HIDDEN */}
+                    <div className="pr-1 scrollbar-hide">
                         {!emailSubmitted && !showForgotPassword ? (
                             /* Step 1: Email Entry */
                             <form onSubmit={handleEmailSubmit} className="space-y-4">
@@ -741,14 +748,16 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                                 </Button>
 
                                 <div className="mt-6">
-                                    <div className="relative">
-                                        <div className="absolute inset-0 flex items-center">
-                                            <div className="w-full border-t border-gray-300"></div>
+                                    {isLogin && (
+                                        <div className="relative">
+                                            <div className="absolute inset-0 flex items-center">
+                                                <div className="w-full border-t border-gray-300"></div>
+                                            </div>
+                                            <div className="relative flex justify-center text-sm">
+                                                <span className="px-2 bg-white text-gray-500">Or continue with</span>
+                                            </div>
                                         </div>
-                                        <div className="relative flex justify-center text-sm">
-                                            <span className="px-2 bg-white text-gray-500">Or continue with</span>
-                                        </div>
-                                    </div>
+                                    )}
 
                                     <div className="mt-6 space-y-3">
                                         {/* Google OAuth Button */}
@@ -979,19 +988,7 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                                             </select>
                                         </div>
 
-                                        {isTeachingRole(teacherTitle) && (
-                                            <div className="space-y-2">
-                                                <label className="block text-sm font-medium text-gray-700">Department</label>
-                                                <select
-                                                    className="w-full bg-white border border-gray-300 rounded-md p-2 text-black focus:ring-blue-500 focus:border-blue-500"
-                                                    value={department}
-                                                    onChange={e => setDepartment(e.target.value)}
-                                                >
-                                                    <option value="">-- Select Department --</option>
-                                                    {departments.map(d => <option key={d} value={d}>{d}</option>)}
-                                                </select>
-                                            </div>
-                                        )}
+
 
                                         {isTeachingRole(teacherTitle) && (
                                             <div className="space-y-2">
@@ -1057,14 +1054,7 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                                                 )}
                                             </select>
                                         </div>
-                                        <Input
-                                            id="instituteName"
-                                            label={orgType === 'school' ? 'School Name' : 'Institute Name'}
-                                            value={instituteName}
-                                            onChange={(e) => setInstituteName(e.target.value)}
-                                            required
-                                            className="text-black"
-                                        />
+
                                     </>
                                 )}
 
@@ -1316,7 +1306,9 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                                     </svg>
                                 </div>
                                 <div className="ml-4">
-                                    <h3 className="text-lg font-bold text-gray-900">Account Not Found</h3>
+                                    <h3 className="text-lg font-bold text-gray-900">
+                                        {popupError && (popupError.includes('not registered') || popupError.includes('not found')) ? 'Account Not Found' : 'Connection Error'}
+                                    </h3>
                                     <div className="mt-1">
                                         <p className="text-sm text-gray-500">{popupError}</p>
                                     </div>

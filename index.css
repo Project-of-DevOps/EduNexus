@@ -1,0 +1,61 @@
+/* Global Styles and Overrides */
+
+/* 
+  Fix for <option> elements in dropdowns.
+  Browsers often default these to white background even in dark themes.
+  We explicitly set them to use our theme's subtle background and text color.
+*/
+option {
+  background-color: rgb(var(--subtle-background-color));
+  color: rgb(var(--text-color));
+}
+
+/* 
+  Improve visibility of placeholder text.
+  Browsers apply opacity to placeholders by default, making them too faint.
+  We force full opacity and use our explicit secondary text color.
+*/
+input::placeholder,
+textarea::placeholder,
+select::placeholder {
+  color: rgb(var(--text-secondary-color));
+  opacity: 1;
+  /* Default is often 0.5 or lower */
+}
+
+/* Ensure consistent base styles */
+body {
+  background-color: rgb(var(--background-color));
+  color: rgb(var(--text-color));
+}
+
+/* Scrollbar Styling for Webkit (Chrome/Safari/Edge) to match theme */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgb(var(--subtle-background-color));
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--border-color));
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--accent-tint-color));
+}
+
+/* Utility to hide scrollbar but keep functionality */
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  /* IE and Edge */
+  scrollbar-width: none;
+  /* Firefox */
+}

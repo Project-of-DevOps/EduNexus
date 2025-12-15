@@ -397,15 +397,16 @@ const ManagementDashboard: React.FC = () => {
                             {existingInstituteCodes.length === 0 ? (
                                 <>
                                     {pendingCodeRequests?.filter(r => r.orgType === 'institute' && (r.instituteId ? r.instituteId === currentInstituteId : true)).length > 0 ? (
-                                        <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-md">
-                                            <h5 className="font-bold text-yellow-800 mb-2">Pending Request</h5>
-                                            <p className="text-sm text-yellow-700 mb-2">A request for an Institute Code is pending approval.</p>
+                                        <div className="mb-6 p-4 bg-[rgb(var(--subtle-background-color))] border border-[rgb(var(--border-color))] rounded-md">
+
+                                            <h5 className="font-bold text-[rgb(var(--text-color))] mb-2">Pending Request</h5>
+                                            <p className="text-sm text-[rgb(var(--text-secondary-color))] mb-2">A request for an Institute Code is pending approval.</p>
                                             {pendingCodeRequests?.filter(r => r.orgType === 'institute' && (r.instituteId ? r.instituteId === currentInstituteId : true)).map(req => (
-                                                <div key={req.id} className="flex justify-between items-center bg-white p-2 rounded border border-yellow-100 mb-2">
+                                                <div key={req.id} className="flex justify-between items-center bg-[rgb(var(--background-color))] p-2 rounded border border-[rgb(var(--border-color))] mb-2">
                                                     <div>
-                                                        <div className="text-xs text-gray-500">Reference Token</div>
-                                                        <div className="font-mono font-bold text-sm">{req.token}</div>
-                                                        <div className="text-xs text-gray-400">{new Date(req.requestAt).toLocaleString()}</div>
+                                                        <div className="text-xs text-[rgb(var(--text-secondary-color))]">Reference Token</div>
+                                                        <div className="font-mono font-bold text-sm text-[rgb(var(--text-color))]">{req.token}</div>
+                                                        <div className="text-xs text-[rgb(var(--text-secondary-color))]">{new Date(req.requestAt).toLocaleString()}</div>
                                                     </div>
                                                     <Button size="sm" onClick={async () => {
                                                         if (!req.token) return;
@@ -538,15 +539,15 @@ const ManagementDashboard: React.FC = () => {
                             {existingSchoolCodes.length === 0 ? (
                                 <>
                                     {pendingCodeRequests?.filter(r => r.orgType === 'school' && (r.instituteId ? r.instituteId === currentInstituteId : true)).length > 0 ? (
-                                        <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-md">
-                                            <h5 className="font-bold text-yellow-800 mb-2">Pending Request</h5>
-                                            <p className="text-sm text-yellow-700 mb-2">A request for a School Code is pending approval.</p>
+                                        <div className="mb-6 p-4 bg-[rgb(var(--subtle-background-color))] border border-[rgb(var(--border-color))] rounded-md">
+                                            <h5 className="font-bold text-[rgb(var(--text-color))] mb-2">Pending Request</h5>
+                                            <p className="text-sm text-[rgb(var(--text-secondary-color))] mb-2">A request for a School Code is pending approval.</p>
                                             {pendingCodeRequests?.filter(r => r.orgType === 'school' && (r.instituteId ? r.instituteId === currentInstituteId : true)).map(req => (
-                                                <div key={req.id} className="flex justify-between items-center bg-white p-2 rounded border border-yellow-100 mb-2">
+                                                <div key={req.id} className="flex justify-between items-center bg-[rgb(var(--background-color))] p-2 rounded border border-[rgb(var(--border-color))] mb-2">
                                                     <div>
-                                                        <div className="text-xs text-gray-500">Reference Token</div>
-                                                        <div className="font-mono font-bold text-sm">{req.token}</div>
-                                                        <div className="text-xs text-gray-400">{new Date(req.requestAt).toLocaleString()}</div>
+                                                        <div className="text-xs text-[rgb(var(--text-secondary-color))]">Reference Token</div>
+                                                        <div className="font-mono font-bold text-sm text-[rgb(var(--text-color))]">{req.token}</div>
+                                                        <div className="text-xs text-[rgb(var(--text-secondary-color))]">{new Date(req.requestAt).toLocaleString()}</div>
                                                     </div>
                                                     <Button size="sm" onClick={async () => {
                                                         if (!req.token) return;
@@ -711,13 +712,13 @@ const ManagementDashboard: React.FC = () => {
                     <div className="space-y-6">
                         <div className="flex gap-4 border-b border-[rgb(var(--border-color))] pb-2">
                             <button
-                                className={`px-4 py-2 font-medium ${teacherViewMode === 'pending' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500'}`}
+                                className={`px-4 py-2 font-extrabold ${teacherViewMode === 'pending' ? 'text-[rgb(var(--highlight-color))] border-b-4 border-[rgb(var(--highlight-color))]' : 'text-[rgb(var(--text-color))]'}`}
                                 onClick={() => setTeacherViewMode('pending')}
                             >
                                 Pending Sign-ups
                             </button>
                             <button
-                                className={`px-4 py-2 font-medium ${teacherViewMode === 'existing' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500'}`}
+                                className={`px-4 py-2 font-extrabold ${teacherViewMode === 'existing' ? 'text-[rgb(var(--highlight-color))] border-b-4 border-[rgb(var(--highlight-color))]' : 'text-[rgb(var(--text-color))]'}`}
                                 onClick={() => setTeacherViewMode('existing')}
                             >
                                 Existing Teachers
@@ -738,8 +739,8 @@ const ManagementDashboard: React.FC = () => {
                                     onExport={() => alert('Exporting...')}
                                 />
                                 <Card className="p-6">
-                                    <h3 className="text-xl font-bold mb-4">Generate Teacher Code</h3>
-                                    <p className="mb-4 text-sm text-gray-600">Select a role and department (optional) to generate a unique sign-up code for a new teacher.</p>
+                                    <h3 className="text-xl font-bold mb-4 text-[rgb(var(--text-color))]">Generate Teacher Code</h3>
+                                    <p className="mb-4 text-sm text-[rgb(var(--text-color))] font-bold">Select a role and department (optional) to generate a unique sign-up code for a new teacher.</p>
                                     <form onSubmit={handleAddTeacher} className="space-y-4">
                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                             <div>
@@ -830,15 +831,15 @@ const ManagementDashboard: React.FC = () => {
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
 
                             <Card className="p-6 text-center">
-                                <h4 className="text-lg font-bold text-gray-500">Total Teachers</h4>
+                                <h4 className="text-lg font-bold text-[rgb(var(--text-color))]">Total Teachers</h4>
                                 <p className="text-4xl font-extrabold text-[#1e3a8a] mt-2">{teachers.length}</p>
                             </Card>
                             <Card className="p-6 text-center">
-                                <h4 className="text-lg font-bold text-gray-500">Total Classes</h4>
+                                <h4 className="text-lg font-bold text-[rgb(var(--text-color))]">Total Classes</h4>
                                 <p className="text-4xl font-extrabold text-[#1e3a8a] mt-2">{visibleClasses.length}</p>
                             </Card>
                             <Card className="p-6 text-center">
-                                <h4 className="text-lg font-bold text-gray-500">Departments</h4>
+                                <h4 className="text-lg font-bold text-[rgb(var(--text-color))]">Departments</h4>
                                 <p className="text-4xl font-extrabold text-[#1e3a8a] mt-2">{visibleDepartments.length}</p>
                             </Card>
                         </div>
@@ -984,7 +985,7 @@ const ManagementDashboard: React.FC = () => {
                                     </div>
                                 ))}
                                 {teachers.filter(t => (t as TeacherExtended).department === selectedAnalyticsItem).length === 0 && (
-                                    <p className="text-gray-500">No teachers found in this department.</p>
+                                    <p className="text-[rgb(var(--text-color))] font-bold italic">No teachers found in this department.</p>
                                 )}
                             </div>
                         )}

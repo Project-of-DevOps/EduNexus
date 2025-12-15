@@ -45,9 +45,9 @@ const LoginPage: React.FC = () => {
       </div>
 
       {/* Right Column - Login Form (60% width on Desktop, Full on Mobile) - SCROLLABLE */}
-      <div className="w-full lg:w-7/12 h-full overflow-y-auto flex flex-col items-center bg-gray-50/50">
+      <div className="w-full lg:w-7/12 h-full overflow-y-auto scrollbar-hide flex flex-col items-center bg-gray-50/50">
         <div className="w-full max-w-md space-y-8 py-12 px-4 sm:px-8 lg:px-12">
-          <div className="text-center lg:text-left">
+          <div className="text-center lg:text-left select-none">
             <h2 className="text-3xl font-bold text-gray-900">Sign in</h2>
             <p className="mt-2 text-sm text-gray-500">
               Welcome back! Please enter your details.
@@ -58,7 +58,7 @@ const LoginPage: React.FC = () => {
             <UnifiedLoginForm />
           </div>
 
-          <div className="mt-6 text-center text-xs text-gray-400 space-y-2">
+          <div className="mt-6 text-center text-xs text-gray-400 space-y-2 select-none">
             <div className="flex justify-center lg:justify-start space-x-4">
               <Link to="/privacy-policy" className="hover:text-gray-600 transition-colors hover:underline">Privacy Policy</Link>
               <span>&bull;</span>
