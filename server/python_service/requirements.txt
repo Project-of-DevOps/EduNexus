@@ -5,4 +5,7 @@ supabase
 python-dotenv
 pydantic
 bcrypt
+psycopg2-binary
+certifi
+requests
 

@@ -11,6 +11,9 @@ def load_env():
     here = os.path.dirname(__file__)
     load_dotenv(os.path.join(here, '..', '.env'))
 
+# Guard for admin.create_user usage in automated flows
+ALLOW_ADMIN_CREATE = os.environ.get('ALLOW_ADMIN_CREATE', '').lower() in ('1', 'true', 'yes')
+
 
 def rand_email(prefix: str):
     return f"{prefix.lower()}_{int(time.time())}_{uuid.uuid4().hex[:6]}@example.com"
@@ -184,6 +187,8 @@ def run():
             created.append({'role': role, 'email': email, 'password': password, 'id': user_id})
         else:
             print('No user_id returned for signup; attempting admin create_user')
+            if not ALLOW_ADMIN_CREATE:
+                raise RuntimeError('Refusing to call admin.create_user: set ALLOW_ADMIN_CREATE=1 in env to enable')
             try:
                 admin_res = sb.auth.admin.create_user({
                     'email': email,
@@ -297,6 +302,7 @@ def run():
 
     # Create an org code and verify. If regular insert fails due to permission issues
     # (some Supabase projects enforce RLS/policies), fall back to direct DB insert via DATABASE_URL.
+    org_code_created_via_supabase = False
     try:
         print('Creating org code via Supabase table API...')
         code = 'TST' + uuid.uuid4().hex[:6].upper()
@@ -305,15 +311,16 @@ def run():
         if hasattr(res, 'error') and res.error:
             raise Exception(res.error)
         check = sb.table('org_codes').select('*').eq('code', code).execute()
-        print('Org code present via Supabase:', bool(getattr(check, 'data', None)), 'code:', code)
+        org_code_created_via_supabase = bool(getattr(check, 'data', None))
+        print('Org code present via Supabase:', org_code_created_via_supabase, 'code:', code)
     except Exception as e:
         print('Supabase insert failed for org_codes, attempting direct DB fallback:', e)
         # Fallback: use DATABASE_URL to insert directly
         try:
             import psycopg2
             from psycopg2.extras import RealDictCursor
-            from dotenv import load_dotenv as _load_env
-            _load_env(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
+            from dotenv import load_dotenv as _load_dotenv
+            _load_dotenv(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
             conn_str = os.environ.get('DATABASE_URL')
             if not conn_str:
                 raise RuntimeError('DATABASE_URL not configured for fallback')
@@ -340,6 +347,40 @@ def run():
     print('\nTEST SUMMARY')
     for c in created:
         print('-', c['role'], c['email'], 'id=', c['id'])
+
+    # --- Assertions to fail fast in CI ---
+    # Sign-ins
+    if not all(r['ok'] for r in signin_results):
+        failed = [r for r in signin_results if not r['ok']]
+        raise SystemExit(f"Sign-in assertion failed for: {failed}")
+
+    # Role rows
+    for c in created:
+        role = c['role']
+        uid = c['id']
+        if role == 'Teacher':
+            r = sb.table('teachers').select('*').eq('user_id', uid).execute()
+            if not getattr(r, 'data', None):
+                raise SystemExit(f"Missing teachers row for user {c['email']}")
+        if role == 'Student':
+            r = sb.table('students').select('*').eq('user_id', uid).execute()
+            if not getattr(r, 'data', None):
+                raise SystemExit(f"Missing students row for user {c['email']}")
+        if role == 'Parent':
+            r = sb.table('parents').select('*').eq('user_id', uid).execute()
+            if not getattr(r, 'data', None):
+                raise SystemExit(f"Missing parents row for user {c['email']}")
+
+    # Org code via Supabase
+    if not org_code_created_via_supabase:
+        raise SystemExit('Org code could not be created via Supabase table API (fallback was used)')
+
+    # Dashboard state check
+    if created:
+        u = created[0]
+        got = sb.table('user_dashboard_states').select('*').eq('user_id', u['id']).execute()
+        if not getattr(got, 'data', None):
+            raise SystemExit(f"Dashboard state missing for {u['email']}")
 
 
 if __name__ == '__main__':
