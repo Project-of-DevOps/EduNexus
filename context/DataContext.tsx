@@ -314,15 +314,17 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
+  // Retry Pending Signup (Use Python Service)
   const retryPendingSignup = async (id: string) => {
     const item = pendingManagementSignups.find(p => p.id === id);
     if (!item) return false;
 
-    const apiUrl = (import.meta as any).env?.VITE_API_URL || 'http://localhost:4000';
+    // Use Python Service
+    const pythonUrl = `http://${window.location.hostname}:8000`; // Dynamically use localhost:8000
     try {
-      const resp = await fetch(`${apiUrl}/api/signup`, {
+      const resp = await fetch(`${pythonUrl}/api/py/signup`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Queued-Signup': '1' },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: item.name || undefined, email: item.email, password: item.password, role: 'Management', extra: item.extra || {} })
       });
       if (!resp.ok) {

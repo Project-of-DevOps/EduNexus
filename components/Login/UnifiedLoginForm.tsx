@@ -250,8 +250,9 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
         if (isLogin) {
             setLoading(true);
             try {
-                const apiUrl = (import.meta as any).env?.VITE_API_URL || `http://${window.location.hostname}:4000`;
-                const res = await fetch(`${apiUrl}/api/auth/check-email`, {
+                // Use Python Service (Port 8000) for check-email
+                const pythonUrl = `http://${window.location.hostname}:8000`;
+                const res = await fetch(`${pythonUrl}/api/py/check-email`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ email })
@@ -586,13 +587,12 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                 }
 
                 // Teacher Verification Logic
-                if (activeRole === UserRole.Teacher) {
-                    const pendingTeacher = verifyTeacherCode(uniqueId);
-                    if (!pendingTeacher) {
-                        setError('Invalid Unique Code. Please contact Management.');
-                        setLoading(false);
-                        return;
-                    }
+                // If it matches a pending invite (local), use that. Otherwise, assume it is an Institute Code and let backend validate.
+                const pendingTeacher = activeRole === UserRole.Teacher ? verifyTeacherCode(uniqueId) : null;
+
+                if (activeRole === UserRole.Teacher && !pendingTeacher) {
+                    // It might be an Institute Code. Do not block.
+                    // But we should ensure uniqueId is provided (already validated by validate())
                 }
 
                 const extras: any = { uniqueId, orgType };
@@ -610,7 +610,7 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
 
                 const ok = await signUp(name, email, password, activeRole as UserRole, extras);
                 if (ok) {
-                    if (activeRole === UserRole.Teacher) consumeTeacherCode(uniqueId);
+                    if (activeRole === UserRole.Teacher && pendingTeacher) consumeTeacherCode(uniqueId);
                     // Instead of navigating immediately, ask to link Google
                     setShowGoogleLinkModal(true);
                 } else {

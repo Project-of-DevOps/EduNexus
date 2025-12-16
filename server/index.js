@@ -47,7 +47,8 @@ app.use(cors({
       /^http:\/\/localhost:\d+$/,
       /^http:\/\/127\.0\.0\.1:\d+$/,
       /^http:\/\/192\.168\.\d+\.\d+:\d+$/,
-      /^http:\/\/172\.\d+\.\d+\.\d+:\d+$/ // 172.x.x.x
+      /^http:\/\/172\.\d+\.\d+\.\d+:\d+$/, // 172.x.x.x
+      /^http:\/\/10\.\d+\.\d+\.\d+:\d+$/   // 10.x.x.x (User's current network)
     ];
 
     const isAllowed = allowedPatterns.some(pattern => pattern.test(origin)) ||
@@ -768,21 +769,44 @@ app.post('/api/org-code/request', authenticateToken, async (req, res, next) => {
 app.get('/api/org-code/confirm/:token', async (req, res, next) => {
   try {
     const { token } = req.params;
-    const r = await pool.query('UPDATE org_code_requests SET status=$1 WHERE token=$2 RETURNING management_email, org_type', ['confirmed', token]);
 
-    if (!r || !r.rows || !r.rows.length) return res.status(404).send('Invalid or expired token');
+    // First, get the request details
+    const r = await pool.query('SELECT * FROM org_code_requests WHERE token = $1', [token]);
+    if (!r.rows.length) return res.status(404).send('Invalid or expired token');
 
-    const { management_email, org_type } = r.rows[0];
+    const request = r.rows[0];
+    if (request.status === 'confirmed') return res.send('Already confirmed.');
 
-    // Here we would generate the actual org code and email it to the user
-    // For now, just notify dev it's confirmed
+    // Update status
+    await pool.query('UPDATE org_code_requests SET status=$1 WHERE token=$2', ['confirmed', token]);
+
+    const { management_email, org_type, institute_id } = request;
+
+    // Generate Code
+    const prefix = org_type === 'institute' ? 'INST' : 'SCH';
+    const randomSuffix = Math.floor(100000 + Math.random() * 900000).toString();
+    const code = `${prefix}-${randomSuffix}`;
+
+    // Insert into org_codes table (Created by setup_tables.js)
+    try {
+      await pool.query(
+        'INSERT INTO org_codes (code, type, institute_id, created_by) VALUES ($1, $2, $3, $4)',
+        [code, org_type, institute_id, null] // created_by is null as it is system generated
+      );
+    } catch (dbErr) {
+      console.error('Failed to insert org_code', dbErr);
+      // Fallback: If table missing (shouldn't be), just log. 
+      // But we want it to work.
+    }
+
+    // Email user
     await sendEmail(
       management_email,
       'Organization Code Approved',
-      `Your request for ${org_type} code has been approved. Please contact support to receive your code.`
+      `Your request for ${org_type} code has been approved.\n\nYour Code: ${code}\n\nYou can now use this code to register users.`
     );
 
-    res.send('Request confirmed. Email sent to user.');
+    res.send(`Request confirmed. Code Generated: ${code}. Email sent to user.`);
   } catch (e) {
     next(e);
   }
@@ -1077,7 +1101,7 @@ const handleSignupAsync = async (req, res, next) => {
     next(err);
   }
 };
-app.post('/api/signup', handleSignupAsync);
+// app.post('/api/signup', handleSignupAsync); // DEPRECATED - Moved to Python Service
 
 // GET all pending signups from database queue
 app.get('/api/queue-signups', checkAdminAuth, async (req, res, next) => {
@@ -1351,7 +1375,8 @@ app.post('/api/auth/google-login', async (req, res, next) => {
   }
 });
 
-// Updated Login with JWT & 2FA
+// Updated Login with JWT & 2FA - DEPRECATED (Moved to Python Service)
+/*
 app.post('/api/login', async (req, res, next) => {
   try {
     // Validate Input
@@ -1412,6 +1437,7 @@ app.post('/api/login', async (req, res, next) => {
     next(err);
   }
 });
+*/
 
 // Refresh Token Endpoint
 app.post('/api/refresh-token', (req, res) => {
@@ -1453,6 +1479,27 @@ app.post('/api/logout', (req, res) => {
 app.use((err, req, res, next) => {
   logger.error(err.stack);
   res.status(500).json({ error: 'Internal Server Error' });
+});
+
+// Dashboard Data Endpoint
+app.get('/api/dashboard-data', authenticateToken, async (req, res, next) => {
+  try {
+    const orgCodesQuery = await pool.query('SELECT * FROM org_codes');
+    // Best effort for other entities if tables exist, otherwise return empty
+    let deps = [], classes = [], teachers = [];
+    try { deps = (await pool.query('SELECT * FROM departments')).rows; } catch (e) { }
+    try { classes = (await pool.query('SELECT * FROM classes')).rows; } catch (e) { }
+    try { teachers = (await pool.query("SELECT * FROM users WHERE role = 'Teacher'")).rows; } catch (e) { }
+
+    res.json({
+      orgCodes: orgCodesQuery.rows || [],
+      departments: deps,
+      classes: classes,
+      teachers: teachers
+    });
+  } catch (e) {
+    next(e);
+  }
 });
 
 if (require.main === module) {

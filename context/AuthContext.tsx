@@ -200,18 +200,15 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
     }
 
-    // Server Login (Management or if local not found)
-    const apiUrl = (import.meta as any).env?.VITE_API_URL || 'http://localhost:4000';
+    // Python Service Login (Port 8000)
+    const pythonUrl = `http://${window.location.hostname}:8000`;
     try {
-      const resp = await fetch(`${apiUrl}/api/login`, {
+      const resp = await fetch(`${pythonUrl}/api/py/signin`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           email,
-          password,
-          role,
-          extra,
-          twoFactorToken: extra?.twoFactorToken // Pass 2FA token if present
+          password
         })
       });
 
@@ -223,22 +220,21 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const json = await resp.json();
 
       if (resp.ok) {
-        if (json.require2fa) {
-          return { success: false, require2fa: true };
-        }
-
         if (json && json.success && json.user) {
           const serverUser = json.user;
+          // Python service returns dashboard_state too, we could store it
+          // json.token is the session access_token
+
           // persist a local copy (without password) so the app can use it
           addUser({ ...serverUser, password: undefined } as any);
           setUser(serverUser as LoggedInUser);
           return { success: true };
         }
       } else {
-        return { success: false, error: json.error || 'Login failed' };
+        return { success: false, error: json.detail || json.error || 'Login failed' };
       }
     } catch (e) {
-      console.warn('login API call failed', e);
+      console.warn('Python login API call failed', e);
       // Fallback logic for offline management users...
       if (role === UserRole.Management) {
         const pendingMatch = (pendingManagementSignups || []).find(p => p.email.toLowerCase() === emailLower && p.password === password);
@@ -251,8 +247,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
     }
 
-
-    // Use fallback error if server login failed and no local match
     return { success: false, error: 'Login failed or user not found' };
   };
 
@@ -328,51 +322,45 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       base.instituteId = extra.instituteName || extra.instituteId || '';
     }
 
-    // Persist users to the server when available (triggers welcome email)
-    const apiUrl = (import.meta as any).env?.VITE_API_URL || `http://${window.location.hostname}:4000`;
-    if (apiUrl) {
-      try {
-        const resp = await fetch(`${apiUrl}/api/signup`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, email, password, role, extra })
-        });
-        if (resp.ok) {
-          const json = await resp.json();
-          if (json && json.success && json.user) {
-            // Sync with Supabase Auth (create user there too)
-            try {
-              await supabase.auth.signUp({ email, password });
-            } catch (sbErr) {
-              console.warn('Supabase Auth Sync Failed:', sbErr);
-            }
+    // Persist users to the python server when available (triggers welcome email)
+    const pythonUrl = `http://${window.location.hostname}:8000`;
+    try {
+      const resp = await fetch(`${pythonUrl}/api/py/signup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, email, password, role, extra }) // Python expects { name, email, password, role } mostly
+      });
+      if (resp.ok) {
+        const json = await resp.json();
+        if (json && json.success && json.user) {
+          // Sync with Supabase Auth handled by Python service now
 
-            // add a local copy and activate session
-            const u = { ...json.user };
-            addUser({ ...u, password: undefined } as any);
-            setUser(u as LoggedInUser);
-            return true;
-          }
-        }
-      } catch (e) {
-        // logging — API unreachable
-        console.warn('signup API failed', e);
-      }
-
-      // if we reach here it means API didn't return success
-      // For Management, queue for later sync
-      if (role === UserRole.Management) {
-        try {
-          addPendingManagementSignup({ name, email, password, extra });
-          const pendingLocal = { ...base, pendingSync: true };
-          addUser(pendingLocal as any);
-          setUser(pendingLocal as LoggedInUser);
+          // add a local copy and activate session
+          const u = { ...json.user };
+          addUser({ ...u, password: undefined } as any);
+          setUser(u as LoggedInUser);
           return true;
-        } catch (err) {
-          // fall back to local-only storage if queueing fails
         }
+      }
+    } catch (e) {
+      // logging — API unreachable
+      console.warn('Python signup API failed', e);
+    }
+
+    // if we reach here it means API didn't return success
+    // For Management, queue for later sync
+    if (role === UserRole.Management) {
+      try {
+        addPendingManagementSignup({ name, email, password, extra });
+        const pendingLocal = { ...base, pendingSync: true };
+        addUser(pendingLocal as any);
+        setUser(pendingLocal as LoggedInUser);
+        return true;
+      } catch (err) {
+        // fall back to local-only storage if queueing fails
       }
     }
+
 
     // normalize email to lowercase when storing to avoid case mismatch on login
     const withNormalizedEmail = { ...base, email: (base.email || '').toLowerCase() };

@@ -80,6 +80,7 @@ export interface StudentTask {
   taskId: string;
   studentId: string;
   status: 'pending' | 'done' | 'overdue' | 'incomplete' | 'Completed' | 'To Do' | 'In Progress';
+  completedDate?: string;
 }
 
 export interface Mark {
@@ -109,15 +110,59 @@ export interface Message {
   content: string;
   timestamp: string;
   readBy?: string[];
+  senderId?: string;
 }
 
 export interface Department { id: string; name: string; instituteId?: string; }
 
 // Library types
-export interface Book { id: string; title: string; author?: string; createdAt?: string; }
-export interface BorrowRecord { id: string; bookId: string; borrowerId: string; dueAt?: string; returnedAt?: string; }
-export interface Reservation { id: string; bookId: string; requesterId: string; expiresAt?: string | null; }
-export interface BookRequest { id: string; title?: string; author?: string; requesterId?: string; status?: 'pending' | 'approved' | 'rejected'; }
+export interface Book {
+  id: string;
+  title: string;
+  author?: string;
+  createdAt?: string;
+  totalCopies?: number;
+  availableCopies?: number;
+  publisher?: string;
+  isbn?: string;
+  category?: string;
+  tags?: string[];
+}
+
+export interface BorrowRecord {
+  id: string;
+  bookId: string;
+  borrowerId: string;
+  dueAt?: string;
+  returnedAt?: string;
+  bookTitle?: string;
+  borrowerName?: string;
+  borrowedAt?: string;
+  status?: 'borrowed' | 'returned' | 'overdue' | 'lost';
+}
+
+export interface Reservation {
+  id: string;
+  bookId: string;
+  requesterId: string;
+  expiresAt?: string | null;
+  bookTitle?: string;
+  requesterName?: string;
+  reservedAt?: string;
+  status?: 'active' | 'fulfilled' | 'cancelled' | 'notified';
+}
+
+export interface BookRequest {
+  id: string;
+  title?: string;
+  bookTitle?: string;
+  author?: string;
+  requesterId?: string;
+  requesterName?: string;
+  createdAt?: string;
+  reason?: string;
+  status?: 'pending' | 'approved' | 'rejected' | 'fulfilled';
+}
 
 export interface AuditLog { id: string; action: string; actorId?: string; target?: string; timestamp?: string; note?: string; }
 export interface DamageReport { id: string; bookId: string; reporterId?: string; note?: string; status?: string; }
