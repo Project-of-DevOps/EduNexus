@@ -246,7 +246,38 @@ def python_signup(req: SignupRequest):
             # Do not fail request, just log
 
         new_user = user_data
-        return {"success": True, "user": new_user}
+
+        # Attempt to sign in the user immediately and return a session token to avoid
+        # a race where the user cannot sign in right after user creation.
+        session_info = None
+        try:
+            signin_res = auth_client.auth.sign_in_with_password({"email": req.email, "password": req.password})
+            # Debug log: show whether session returned
+            try:
+                if signin_res is None:
+                    print('Post-signup signin returned None')
+                else:
+                    s = getattr(signin_res, 'session', None)
+                    u = getattr(signin_res, 'user', None)
+                    print(f'Post-signup signin: user_present={bool(u)} session_present={bool(s)}')
+                    if s:
+                        session_obj = s
+                        session_info = {
+                            'access_token': getattr(session_obj, 'access_token', None),
+                            'refresh_token': getattr(session_obj, 'refresh_token', None)
+                        }
+                        print(f"Session token preview: {str(session_info['access_token'])[:20]}...")
+            except Exception as pe:
+                print('Post-signin debug failed:', pe)
+        except Exception as e:
+            # Non-fatal: log and continue, the client can still call /signin
+            print(f"Warning: post-signup sign-in failed: {e}")
+
+        response = {"success": True, "user": new_user}
+        if session_info:
+            response['session'] = session_info
+
+        return response
 
     except Exception as e:
         print(f"Signup Error: {e}")
@@ -269,7 +300,9 @@ def python_signin(req: SigninRequest):
              raise HTTPException(status_code=401, detail="Login failed")
 
         user_id = auth_res.user.id
-        session_token = auth_res.session.access_token
+        session_obj = auth_res.session
+        session_token = session_obj.access_token if session_obj else None
+        session_refresh = session_obj.refresh_token if session_obj else None
 
         # Client B: Admin Fetch
         admin_client = create_client(url, key)
@@ -282,12 +315,15 @@ def python_signin(req: SigninRequest):
         state_res = admin_client.table("user_dashboard_states").select("state_data").eq("user_id", user_id).execute()
         dashboard_state = state_res.data[0]['state_data'] if state_res.data else {}
 
-        return {
-            "success": True, 
-            "token": session_token, 
-            "user": user_profile, 
+        response = {
+            "success": True,
+            "user": user_profile,
             "dashboard_state": dashboard_state
         }
+        if session_token:
+            response['session'] = { 'access_token': session_token, 'refresh_token': session_refresh }
+
+        return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

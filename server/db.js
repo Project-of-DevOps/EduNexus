@@ -21,7 +21,9 @@ const createPool = () => {
         return new Pool(poolConfig);
     } catch (e) {
         console.error('Invalid DATABASE_URL configuration', e);
-        return new Pool({ connectionString: process.env.DATABASE_URL });
+        // Remove fallback return so the app crashes with the real error and
+        // the hosting logs contain the full stack / message for diagnostics.
+        throw e;
     }
 };
 

@@ -22,6 +22,8 @@ if (missingEnv.length > 0) {
   // mode — log a warning so tests can inject mocks. In production / dev we
   // still want the process to fail fast when required env vars are missing.
   const msg = `Missing required environment variables: ${missingEnv.join(', ')}`;
+  // Also print to stdout/stderr so hosting logs (Render, Heroku, etc.) show the reason
+  console.error(msg);
   if (process.env.NODE_ENV === 'test') {
     logger.warn(msg);
   } else {

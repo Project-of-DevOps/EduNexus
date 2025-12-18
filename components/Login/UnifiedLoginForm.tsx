@@ -185,6 +185,30 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
             // keep the chooser visible until user acts; the UI will clear the storage
         }
 
+        // Listen for SSO popup messages (postMessage from popup redirect)
+        const ssoMsgHandler = (ev: MessageEvent) => {
+            if (!ev.data || ev.data.type !== 'edunexus:sso_success') return;
+            // Basic origin check
+            if (ev.origin && ev.origin !== window.location.origin) return;
+            try {
+                const provider = ev.data.provider;
+                setSuccessMessage('Sign-in successful');
+                setTimeout(() => {
+                    setSuccessMessage('');
+                    navigateDashboard();
+                    try {
+                        const base = (window.location.hash || '#/login').split('?')[0];
+                        window.location.hash = base;
+                    } catch (ignore) {}
+                }, 2000);
+            } catch (e) {
+                console.warn('Failed handling SSO message', e);
+            }
+        };
+        window.addEventListener('message', ssoMsgHandler);
+        // Cleanup handler on unmount
+        return () => { window.removeEventListener('message', ssoMsgHandler); };
+
         // Legacy handling
         const ssoMissingFlag = params.get('sso_missing');
         if (ssoMissingFlag) {

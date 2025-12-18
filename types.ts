@@ -111,6 +111,10 @@ export interface Message {
   timestamp: string;
   readBy?: string[];
   senderId?: string;
+  // Optional fields used by the UI
+  senderName?: string;
+  targetType?: 'class' | 'department';
+  targetId?: string;
 }
 
 export interface Department { id: string; name: string; instituteId?: string; }

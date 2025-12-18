@@ -1,0 +1,23 @@
+# Minimal Render manifest to deploy server from the `server` subdirectory
+# Adjust repo/branch/plan as needed in the Render dashboard when creating the service.
+services:
+  - type: web
+    name: edunexus-server
+    env: node
+    plan: free
+    rootDirectory: server
+    branch: main
+    buildCommand: "npm ci"
+    startCommand: "npm start"
+    healthCheckPath: "/api/health"
+
+# Optional static site (client) configuration - uncomment/adjust if you want to deploy the client too
+# static_sites:
+#   - name: edunexus-client
+#     repo: <your-repo-url>
+#     branch: main
+#     buildCommand: "npm ci && npm run build"
+#     publishPath: "dist"
+#     envVars:
+#       - key: VITE_SUPABASE_URL
+#       - key: VITE_SUPABASE_ANON_KEY

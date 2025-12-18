@@ -4,7 +4,7 @@ require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
 const client = new Client({
     connectionString: process.env.DATABASE_URL,
-    // ssl: { rejectUnauthorized: false } // Disable SSL for local dev if needed
+    ssl: { rejectUnauthorized: false } // Required for Supabase in hosted environments
 });
 
 const setup = async () => {

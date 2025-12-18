@@ -67,6 +67,24 @@
 </head>
   <body class="bg-[rgb(var(--background-color))] text-[rgb(var(--text-color))] font-medium">
     <div id="root"></div>
+    <script>
+      // Auto-close SSO popup pages: if this page is opened as an OAuth redirect
+      // and contains sso_success, notify the opener and close the popup.
+      (function() {
+        try {
+          const hashQs = (location.hash && location.hash.includes('?')) ? location.hash.split('?')[1] : '';
+          const params = new URLSearchParams(location.search || hashQs || '');
+          const isSso = (location.hash && location.hash.includes('sso_success')) || params.get('sso_success') === 'true';
+          if (isSso && window.opener) {
+            const provider = params.get('provider') || null;
+            try { window.opener.postMessage({ type: 'edunexus:sso_success', provider }, window.location.origin); } catch (e) { try { window.opener.postMessage({ type: 'edunexus:sso_success', provider }, '*'); } catch (e2) {} }
+            try { window.close(); } catch (e) {}
+          }
+        } catch (e) {
+          // noop
+        }
+      })();
+    </script>
     <script type="module">
       // In development: show a simple overlay if any runtime error occurs before React mounts
       if (import.meta.env && import.meta.env.DEV) {

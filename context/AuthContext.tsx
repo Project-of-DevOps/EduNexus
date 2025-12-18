@@ -222,8 +222,23 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (resp.ok) {
         if (json && json.success && json.user) {
           const serverUser = json.user;
-          // Python service returns dashboard_state too, we could store it
-          // json.token is the session access_token
+          // Python service returns dashboard_state too, and may include session tokens
+
+          // If server returned session tokens, set them to the Supabase client so the
+          // browser has a valid auth session (persistSession will store it).
+          if (json.session && (json.session.access_token || json.session.refresh_token)) {
+            try {
+              await supabase.auth.setSession({ access_token: json.session.access_token, refresh_token: json.session.refresh_token });
+              try {
+                const sessCheck = await supabase.auth.getSession();
+                if (import.meta.env.DEV) console.debug('Session after setSession (signin):', sessCheck);
+              } catch (ex) {
+                console.warn('getSession check failed after signin setSession', ex);
+              }
+            } catch (e) {
+              console.warn('Failed to set session after signin', e);
+            }
+          }
 
           // persist a local copy (without password) so the app can use it
           addUser({ ...serverUser, password: undefined } as any);
@@ -334,7 +349,52 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         const json = await resp.json();
         if (json && json.success && json.user) {
           // Sync with Supabase Auth handled by Python service now
-
+          // If server returned session tokens, set them in the client to avoid a
+          // race where the user cannot sign in immediately after signup.
+          if (json.session && (json.session.access_token || json.session.refresh_token)) {
+            try {
+              // supabase-js v2 expects { access_token, refresh_token }
+              // setSession will persist the session client-side when used in the browser
+              await supabase.auth.setSession({ access_token: json.session.access_token, refresh_token: json.session.refresh_token });
+              try {
+                const sessCheck = await supabase.auth.getSession();
+                if (import.meta.env.DEV) console.debug('Session after setSession (signup):', sessCheck);
+              } catch (ex) {
+                console.warn('getSession check failed after signup setSession', ex);
+              }
+            } catch (e) {
+              console.warn('Failed to set session after signup', e);
+            }          } else {
+            // No session returned by signup endpoint — attempt immediate signin as fallback
+            try {
+              const signinResp = await fetch(`${pythonUrl}/api/py/signin`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, password })
+              });
+              if (signinResp.ok) {
+                const signinJson = await signinResp.json();
+                if (import.meta.env.DEV) {
+                  // eslint-disable-next-line no-console
+                  console.debug('Fallback signin response after signup:', signinJson);
+                }
+                if (signinJson.session && (signinJson.session.access_token || signinJson.session.refresh_token)) {
+                  try {
+                    await supabase.auth.setSession({ access_token: signinJson.session.access_token, refresh_token: signinJson.session.refresh_token });
+                  try {
+                    const sessCheck = await supabase.auth.getSession();
+                    if (import.meta.env.DEV) console.debug('Session after fallback signin (signup):', sessCheck);
+                  } catch (ex) {
+                    console.warn('getSession check failed after fallback signin', ex);
+                  }
+                  } catch (e) {
+                    console.warn('Failed to set session after fallback signin', e);
+                  }
+                }
+              }
+            } catch (e) {
+              console.warn('Fallback signin after signup failed', e);
+            }          }
           // add a local copy and activate session
           const u = { ...json.user };
           addUser({ ...u, password: undefined } as any);

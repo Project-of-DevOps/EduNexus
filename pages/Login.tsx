@@ -25,8 +25,8 @@ const LoginPage: React.FC = () => {
     <div className="h-screen w-screen flex bg-white font-sans text-gray-900 overflow-hidden">
       {/* Left Column - Hero/Brand (40% width on Desktop, Hidden on Mobile) - FIXED */}
       <div className="hidden lg:flex lg:w-5/12 h-full relative bg-blue-900 border-r border-blue-800">
-        <div className="absolute inset-0 bg-[url('/login-hero.png')] bg-cover bg-center opacity-90"></div>
-        {/* Gradient overlay for text readability */}
+        {/* Background: gradient fallback plus optional hero image (serves even if the asset is missing) */}
+        <div className="absolute inset-0 bg-cover bg-center opacity-90" style={{ backgroundImage: `linear-gradient(180deg, rgba(14,45,102,0.75), rgba(59,130,246,0.35)), url('/login-hero.svg')` }}></div>
         <div className="absolute inset-0 bg-gradient-to-t from-blue-900/95 via-blue-900/40 to-blue-900/10"></div>
 
         <div className="relative z-10 flex flex-col justify-end p-12 text-white pb-20 h-full">

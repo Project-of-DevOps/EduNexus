@@ -1,1 +1,18 @@
-[]
+[
+  {
+    "id": "signup_1765912518807",
+    "name": "Maneeth rao",
+    "email": "maneeth1302rao@gmail.com",
+    "password_hash": "maneeth2006",
+    "role": "Management",
+    "extra": {
+      "uniqueId": "",
+      "orgType": "school",
+      "title": "Manager"
+    },
+    "status": "failed",
+    "attempts": 1,
+    "createdAt": "2025-12-16T19:15:18.808Z",
+    "history": []
+  }
+]
