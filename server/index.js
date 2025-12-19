@@ -1,4 +1,17 @@
+// --- CRASH REPORTER: ADD THIS TO THE VERY TOP OF server/index.js ---
+process.on('uncaughtException', (err) => {
+  console.error('CRITICAL ERROR:', err);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('UNHANDLED REJECTION:', reason);
+});
+console.log('Server is starting...');
+// ------------------------------------------------------------------
+
 require('dotenv').config();
+console.log('Server starting... Environment loaded.');
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
