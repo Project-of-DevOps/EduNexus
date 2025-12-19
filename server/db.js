@@ -1,6 +1,7 @@
 const { Pool } = require('pg');
 const path = require('path');
-require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+// dotenv is loaded in index.js, no need to reload here
+// require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
 // Robust configuration for Supabase
 const createPool = () => {
