@@ -51,31 +51,10 @@ app.use(helmet());
 // CORS Configuration
 // Dynamic CORS Configuration
 app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin) return callback(null, true);
-
-    // Explicitly allow the production frontend
-    if (origin === 'https://edunexus-frontend-v2.onrender.com') {
-      return callback(null, true);
-    }
-
-    const allowedPatterns = [
-      /^http:\/\/localhost:\d+$/,
-      /^https:\/\/.*\.onrender\.com$/, // Allow all render subdomains
-    ];
-
-    const isAllowed = allowedPatterns.some(pattern => pattern.test(origin));
-
-    if (isAllowed) {
-      return callback(null, true);
-    } else {
-      // For debugging, we'll log but allow temporarily if needed, 
-      // but sticking to standard strict CORS for now.
-      console.log('Blocked by CORS:', origin);
-      // Fallback: Just allow it for now to unblock user
-      return callback(null, true);
-    }
-  },
+  origin: [
+    "http://localhost:5173",
+    "https://edunexus-frontend-v2.onrender.com"
+  ],
   credentials: true
 }));
 
