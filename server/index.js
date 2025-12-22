@@ -1425,6 +1425,17 @@ app.post('/api/queue-signups/:id/retry', async (req, res, next) => {
       }
     });
 
+    // View Pending Requests (Missing Endpoint Fix)
+    app.get('/api/org-code/requests', authenticateToken, async (req, res) => {
+      try {
+        const { rows } = await pool.query("SELECT * FROM org_code_requests ORDER BY created_at DESC");
+        res.json(rows);
+      } catch (e) {
+        logger.error('Failed to fetch org code requests', e);
+        res.status(500).json({ error: 'Failed to fetch requests' });
+      }
+    });
+
     // mark queue item as synced
     await pool.query('UPDATE signup_queue SET status=$1, attempts=$2, note=$3 WHERE id=$4', ['synced', item.attempts + 1, 'synced by admin retry', id]);
 
@@ -1594,8 +1605,24 @@ app.post('/api/auth/google-login', async (req, res, next) => {
       const token = generateAccessToken(existingUser);
       const refreshToken = generateRefreshToken(existingUser);
 
-      res.cookie('accessToken', token, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', maxAge: 15 * 60 * 1000 });
-      res.cookie('refreshToken', refreshToken, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', maxAge: 7 * 24 * 60 * 60 * 1000 });
+      // FIX for 401: 'strict' prevents cookies across different Render domains (frontend vs backend)
+      // Must use 'none' + 'secure' for cross-site cookies.
+      const cookieOpts = {
+        httpOnly: true,
+        secure: true, // Always true for SameSite=None
+        sameSite: 'none',
+        maxAge: 15 * 60 * 1000 // 15 mins
+      };
+
+      const refreshCookieOpts = {
+        httpOnly: true,
+        secure: true,
+        sameSite: 'none',
+        maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+      };
+
+      res.cookie('accessToken', token, cookieOpts);
+      res.cookie('refreshToken', refreshToken, refreshCookieOpts);
 
       const userSafe = { ...existingUser };
       delete userSafe.password_hash;
