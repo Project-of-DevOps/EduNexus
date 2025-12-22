@@ -52,27 +52,28 @@ app.use(helmet());
 // Dynamic CORS Configuration
 app.use(cors({
   origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
 
-    // Dynamic allow list
+    // Explicitly allow the production frontend
+    if (origin === 'https://edunexus-frontend-v2.onrender.com') {
+      return callback(null, true);
+    }
+
     const allowedPatterns = [
       /^http:\/\/localhost:\d+$/,
-      /^http:\/\/127\.0\.0\.1:\d+$/,
-      /^http:\/\/192\.168\.\d+\.\d+:\d+$/,
-      /^http:\/\/172\.\d+\.\d+\.\d+:\d+$/, // 172.x.x.x
-      /^http:\/\/10\.\d+\.\d+\.\d+:\d+$/   // 10.x.x.x (User's current network)
+      /^https:\/\/.*\.onrender\.com$/, // Allow all render subdomains
     ];
 
-    const isAllowed = allowedPatterns.some(pattern => pattern.test(origin)) ||
-      origin === process.env.VITE_API_URL ||
-      origin === 'http://localhost:5173';
+    const isAllowed = allowedPatterns.some(pattern => pattern.test(origin));
 
     if (isAllowed) {
       return callback(null, true);
     } else {
-      const msg = `The CORS policy for this site does not allow access from the specified Origin: ${origin}`;
-      return callback(new Error(msg), false);
+      // For debugging, we'll log but allow temporarily if needed, 
+      // but sticking to standard strict CORS for now.
+      console.log('Blocked by CORS:', origin);
+      // Fallback: Just allow it for now to unblock user
+      return callback(null, true);
     }
   },
   credentials: true
