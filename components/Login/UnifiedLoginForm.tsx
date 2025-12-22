@@ -629,7 +629,7 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                     } else if (result.error && result.error.includes("Request was Rejected")) {
                         setApprovalStatus('rejected');
                     } else {
-                        setError(result.error || 'Invalid credentials.');
+                        setError(result.error || 'Login failed.');
                     }
                 }
             } else {
@@ -677,7 +677,7 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                     // Instead of navigating immediately, ask to link Google
                     setShowGoogleLinkModal(true);
                 } else {
-                    setError(result.error || 'Sign-up failed. Please try again.');
+                    setError(result.error || 'Sign-up failed.');
                 }
             }
         } catch (err) {

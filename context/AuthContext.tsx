@@ -271,7 +271,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         }
       } else {
         const errJson = await res.json().catch(() => ({}));
-        return { success: false, error: errJson.detail || 'Login failed' };
+        const errorMsg = errJson.detail || errJson.error || errJson.message || 'Login failed';
+        return { success: false, error: errorMsg };
       }
 
     } catch (e: any) {
