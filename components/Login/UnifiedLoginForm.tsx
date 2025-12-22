@@ -320,7 +320,7 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
             console.warn('Email check failed', e);
             if (isLogin) {
                 setLoading(false);
-                setPopupError('Unable to verify email. Please try again.');
+                setPopupError(`Unable to verify email: ${e}`);
                 setTimeout(() => setPopupError(null), 4000);
                 return;
             }
