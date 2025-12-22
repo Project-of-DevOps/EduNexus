@@ -4,6 +4,7 @@ import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 import { Document, Packer, Paragraph, Table, TableRow, TableCell, TextRun } from 'docx';
 import { LoggedInUser, Class, Message, Teacher, Student, Parent, Dean, UserRole, Task, StudentTask, Mark, AttendanceRecord, Department, TeacherTitle, TeacherExtended } from '../types';
+import { getPythonApiUrl } from '../utils/config';
 
 // NOTE: This DataContext no longer initializes from a large mock dataset.
 // It intentionally starts empty so the app acts like a real application where
@@ -320,7 +321,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (!item) return false;
 
     // Use Python Service
-    const pythonUrl = `http://${window.location.hostname}:8000`; // Dynamically use localhost:8000
+    const pythonUrl = getPythonApiUrl();
     try {
       const resp = await fetch(`${pythonUrl}/api/py/signup`, {
         method: 'POST',

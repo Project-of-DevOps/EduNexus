@@ -8,6 +8,7 @@ import Input from '../ui/Input';
 import Card from '../ui/Card';
 import OTPModal from '../auth/OTPModal';
 import { supabase } from '../../services/supabaseClient';
+import { getPythonApiUrl } from '../../utils/config';
 
 const roles = [
     { id: UserRole.Management, label: 'Management' },
@@ -290,7 +291,7 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
         // Check email for both Login and Signup
         setLoading(true);
         try {
-            const pythonUrl = `http://${window.location.hostname}:8000`;
+            const pythonUrl = getPythonApiUrl();
             const res = await fetch(`${pythonUrl}/api/py/check-email`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },

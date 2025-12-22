@@ -4,6 +4,7 @@ import { LoggedInUser, UserRole, Student, Teacher, Parent } from '../types';
 
 import { useData } from './DataContext';
 import { supabase } from '../services/supabaseClient';
+import { getPythonApiUrl } from '../utils/config';
 
 interface AuthContextType {
   user: LoggedInUser | null;
@@ -237,7 +238,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     // Server-Side Login with Strict Validation
     try {
-      const apiUrl = (import.meta as any).env?.VITE_API_URL || `http://${window.location.hostname}:8000`; // Use Python service
+      const apiUrl = getPythonApiUrl();
 
       const payload: any = {
         email,
@@ -340,7 +341,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
 
     // Persist users to the python server when available (triggers welcome email)
-    const pythonUrl = `http://${window.location.hostname}:8000`;
+    const pythonUrl = getPythonApiUrl();
     try {
       const resp = await fetch(`${pythonUrl}/api/py/signup`, {
         method: 'POST',

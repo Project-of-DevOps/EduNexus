@@ -4,6 +4,7 @@ import { useData } from '../context/DataContext';
 import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
 import { useAuth } from '../hooks/useAuth';
+import { getPythonApiUrl } from '../utils/config';
 import axios from 'axios';
 
 export const ManagementSignupsContent: React.FC = () => {
@@ -21,7 +22,7 @@ export const ManagementSignupsContent: React.FC = () => {
     setError('');
     try {
       // Use Python Service directly (Port 8000)
-      const pythonUrl = `http://${window.location.hostname}:8000`;
+      const pythonUrl = getPythonApiUrl();
       // Ideally pass instituteId if available to filter on server
       const url = currentInstituteId
         ? `${pythonUrl}/api/py/management/pending-teachers?institute_id=${currentInstituteId}`
@@ -46,7 +47,7 @@ export const ManagementSignupsContent: React.FC = () => {
 
   const handleApprove = async (userId: string) => {
     try {
-      const pythonUrl = `http://${window.location.hostname}:8000`;
+      const pythonUrl = getPythonApiUrl();
       await axios.post(`${pythonUrl}/api/py/management/approve-teacher`, { user_id: userId }, { withCredentials: true });
       setSuccessMsg('Request Approved');
       fetchRequests();
@@ -58,7 +59,7 @@ export const ManagementSignupsContent: React.FC = () => {
 
   const handleReject = async (userId: string) => {
     try {
-      const pythonUrl = `http://${window.location.hostname}:8000`;
+      const pythonUrl = getPythonApiUrl();
       await axios.post(`${pythonUrl}/api/py/management/reject-teacher`, { user_id: userId }, { withCredentials: true });
       setSuccessMsg('Request Rejected');
       fetchRequests();
