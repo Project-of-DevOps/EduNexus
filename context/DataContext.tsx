@@ -160,6 +160,14 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
               return [...others, ...data.teachers];
             });
           }
+          if (data.relatedUsers && Array.isArray(data.relatedUsers)) {
+            setUsers(prev => {
+              // Merge related users, ensuring no duplicates
+              const existingIds = new Set(prev.map(u => u.id));
+              const newRelated = (data.relatedUsers as LoggedInUser[]).filter(u => !existingIds.has(u.id));
+              return [...prev, ...newRelated];
+            });
+          }
         }
 
         // Try to fetch any pending org-code requests and code analytics for the management/developer UI

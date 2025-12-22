@@ -1542,16 +1542,33 @@ app.get('/api/dashboard-data', authenticateToken, async (req, res, next) => {
   try {
     const orgCodesQuery = await pool.query('SELECT * FROM org_codes');
     // Best effort for other entities if tables exist, otherwise return empty
-    let deps = [], classes = [], teachers = [];
+    let deps = [], classes = [], teachers = [], relatedUsers = [];
     try { deps = (await pool.query('SELECT * FROM departments')).rows; } catch (e) { }
     try { classes = (await pool.query('SELECT * FROM classes')).rows; } catch (e) { }
     try { teachers = (await pool.query("SELECT * FROM users WHERE role = 'Teacher'")).rows; } catch (e) { }
+
+    if (req.user && req.user.role === 'Parent') {
+      try {
+        const parentRow = await pool.query('SELECT extra FROM users WHERE id=$1', [req.user.id]);
+        if (parentRow.rows.length) {
+          const childIds = parentRow.rows[0].extra.childIds || [];
+          if (childIds.length > 0) {
+            const kids = await pool.query('SELECT id,name,email,role,extra,organization_id,linked_student_id,roll_number FROM users WHERE id = ANY($1)', [childIds]);
+            relatedUsers = kids.rows;
+          }
+        }
+      } catch (e) {
+        // ignore errors in fetching related users
+        console.error('Failed to fetch related users for parent', e);
+      }
+    }
 
     res.json({
       orgCodes: orgCodesQuery.rows || [],
       departments: deps,
       classes: classes,
-      teachers: teachers
+      teachers: teachers,
+      relatedUsers: relatedUsers
     });
   } catch (e) {
     next(e);
