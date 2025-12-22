@@ -146,6 +146,179 @@ app.post('/api/admin/outbox/retry', checkAdminAuth, async (req, res) => {
 });
 
 
+// --- MIGRATED PYTHON ENDPOINTS ---
+// Replaces the simplified logic from server/python_service/main.py
+
+// 1. Check Email
+app.post('/api/py/check-email', async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ detail: "Email required" });
+
+  try {
+    const { data: users, error } = await supabase
+      .from('users')
+      .select('id')
+      .eq('email', email);
+
+    if (error) throw error;
+
+    // Return format matching python
+    res.json({ exists: users.length > 0 });
+  } catch (e) {
+    logger.error('Error in check-email:', e);
+    res.status(500).json({ detail: e.message });
+  }
+});
+
+// 2. Restore Dashboard State
+app.post('/api/py/restore-dashboard-state', async (req, res) => {
+  const { user_id } = req.body;
+  if (!user_id) return res.status(400).json({ detail: "User ID required" });
+
+  try {
+    const { data, error } = await supabase
+      .from('user_dashboard_states')
+      .select('state_data')
+      .eq('user_id', user_id)
+      .maybeSingle();
+
+    if (error && error.code !== 'PGRST116') throw error; // PGRST116 is not found, which is fine
+
+    res.json({ success: true, dashboard_state: data ? data.state_data : {} });
+  } catch (e) {
+    logger.error('Error restoring state:', e);
+    res.status(500).json({ detail: e.message });
+  }
+});
+
+// 3. Update Dashboard State
+app.post('/api/py/state', async (req, res) => {
+  const { user_id, state } = req.body;
+  if (!user_id) return res.status(400).json({ detail: "User ID required" });
+
+  try {
+    const { error } = await supabase
+      .from('user_dashboard_states')
+      .upsert({ user_id, state_data: state, updated_at: new Date().toISOString() });
+
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (e) {
+    logger.error('Error updating state:', e);
+    res.status(500).json({ detail: e.message });
+  }
+});
+
+// 4. View Pending Teachers (for Management)
+app.get('/api/py/management/pending-teachers', async (req, res) => {
+  const { institute_id } = req.query;
+  try {
+    let query = supabase
+      .from('teachers')
+      .select('*, users(name, email, extra)')
+      .eq('status', 'pending');
+
+    if (institute_id) {
+      query = query.eq('institute_id', institute_id);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    res.json(data);
+  } catch (e) {
+    logger.error('Error fetching pending teachers:', e);
+    res.status(500).json({ detail: e.message });
+  }
+});
+
+// 5. Approve Teacher
+app.post('/api/py/management/approve-teacher', async (req, res) => {
+  const { user_id } = req.body;
+  if (!user_id) return res.status(400).json({ detail: "User ID required" });
+
+  try {
+    const { error } = await supabase
+      .from('teachers')
+      .update({ status: 'approved', is_verified: true })
+      .eq('user_id', user_id);
+
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (e) {
+    logger.error('Error approving teacher:', e);
+    res.status(500).json({ detail: e.message });
+  }
+});
+
+// 6. Reject Teacher
+app.post('/api/py/management/reject-teacher', async (req, res) => {
+  const { user_id } = req.body;
+  if (!user_id) return res.status(400).json({ detail: "User ID required" });
+
+  try {
+    const { error } = await supabase
+      .from('teachers')
+      .update({ status: 'rejected', is_verified: false })
+      .eq('user_id', user_id);
+
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (e) {
+    logger.error('Error rejecting teacher:', e);
+    res.status(500).json({ detail: e.message });
+  }
+});
+
+// 7. Signup Proxy
+app.post('/api/py/signup', async (req, res) => {
+
+  const { name, email, password, role, extra } = req.body;
+
+  try {
+    const { data: dup, error: dupErr } = await supabase.from('users').select('id').eq('email', email);
+    if (dup && dup.length > 0) return res.status(400).json({ detail: "Email-ID already been used" });
+
+    const { data: authData, error: authError } = await supabase.auth.signUp({
+      email, password
+    });
+
+    if (authError) throw authError;
+    if (!authData.user) throw new Error("Signup failed");
+
+    const userId = authData.user.id;
+
+    await supabase.from('users').insert({
+      id: userId,
+      name: name || "Unknown",
+      email,
+      role: role || "Management",
+      extra: extra || {},
+      password_hash: "supabase_auth"
+    });
+
+    if (role === 'Management') {
+      await supabase.from('management_managers').insert({ user_id: userId, name, email, role: 'Manager' });
+    } else if (role === 'Teacher') {
+      await supabase.from('teachers').insert({
+        user_id: userId,
+        title: extra?.title,
+        department: extra?.department,
+        institute_id: extra?.instituteId, // Mapping might vary
+        class_id: extra?.classId,
+        is_verified: false,
+        status: 'pending'
+      });
+    }
+    res.json({ success: true, user: { id: userId, email, role } });
+
+  } catch (e) {
+    logger.error('Error in py/signup proxy:', e);
+    res.status(400).json({ detail: e.message });
+  }
+});
+
+
 // Token Helpers
 const generateAccessToken = (user) => {
   return jwt.sign({ id: user.id, role: user.role, email: user.email }, process.env.JWT_SECRET, { expiresIn: '15m' });
@@ -1549,197 +1722,7 @@ app.get('/api/dashboard-data', authenticateToken, async (req, res, next) => {
   }
 });
 
-// --- MIGRATED PYTHON ENDPOINTS ---
-// Replaces the simplified logic from server/python_service/main.py
-
-// 1. Check Email
-app.post('/api/py/check-email', async (req, res) => {
-  const { email } = req.body;
-  if (!email) return res.status(400).json({ detail: "Email required" });
-
-  try {
-    const { data: users, error } = await supabase
-      .from('users')
-      .select('id')
-      .eq('email', email);
-
-    if (error) throw error;
-
-    // Return format matching python
-    res.json({ exists: users.length > 0 });
-  } catch (e) {
-    logger.error('Error in check-email:', e);
-    res.status(500).json({ detail: e.message });
-  }
-});
-
-// 2. Restore Dashboard State
-app.post('/api/py/restore-dashboard-state', async (req, res) => {
-  const { user_id } = req.body;
-  if (!user_id) return res.status(400).json({ detail: "User ID required" });
-
-  try {
-    const { data, error } = await supabase
-      .from('user_dashboard_states')
-      .select('state_data')
-      .eq('user_id', user_id)
-      .maybeSingle();
-
-    if (error && error.code !== 'PGRST116') throw error; // PGRST116 is not found, which is fine
-
-    res.json({ success: true, dashboard_state: data ? data.state_data : {} });
-  } catch (e) {
-    logger.error('Error restoring state:', e);
-    res.status(500).json({ detail: e.message });
-  }
-});
-
-// 3. Update Dashboard State
-app.post('/api/py/state', async (req, res) => {
-  const { user_id, state } = req.body;
-  if (!user_id) return res.status(400).json({ detail: "User ID required" });
-
-  try {
-    const { error } = await supabase
-      .from('user_dashboard_states')
-      .upsert({ user_id, state_data: state, updated_at: new Date().toISOString() });
-
-    if (error) throw error;
-    res.json({ success: true });
-  } catch (e) {
-    logger.error('Error updating state:', e);
-    res.status(500).json({ detail: e.message });
-  }
-});
-
-// 4. View Pending Teachers (for Management)
-app.get('/api/py/management/pending-teachers', async (req, res) => {
-  const { institute_id } = req.query;
-  try {
-    let query = supabase
-      .from('teachers')
-      .select('*, users(name, email, extra)')
-      .eq('status', 'pending');
-
-    if (institute_id) {
-      query = query.eq('institute_id', institute_id);
-    }
-
-    const { data, error } = await query;
-    if (error) throw error;
-
-    res.json(data);
-  } catch (e) {
-    logger.error('Error fetching pending teachers:', e);
-    res.status(500).json({ detail: e.message });
-  }
-});
-
-// 5. Approve Teacher
-app.post('/api/py/management/approve-teacher', async (req, res) => {
-  const { user_id } = req.body;
-  if (!user_id) return res.status(400).json({ detail: "User ID required" });
-
-  try {
-    const { error } = await supabase
-      .from('teachers')
-      .update({ status: 'approved', is_verified: true })
-      .eq('user_id', user_id);
-
-    if (error) throw error;
-    res.json({ success: true });
-  } catch (e) {
-    logger.error('Error approving teacher:', e);
-    res.status(500).json({ detail: e.message });
-  }
-});
-
-// 6. Reject Teacher
-app.post('/api/py/management/reject-teacher', async (req, res) => {
-  const { user_id } = req.body;
-  if (!user_id) return res.status(400).json({ detail: "User ID required" });
-
-  try {
-    const { error } = await supabase
-      .from('teachers')
-      .update({ status: 'rejected', is_verified: false })
-      .eq('user_id', user_id);
-
-    if (error) throw error;
-    res.json({ success: true });
-  } catch (e) {
-    logger.error('Error rejecting teacher:', e);
-    res.status(500).json({ detail: e.message });
-  }
-});
-
-// 7. Signup Proxy (For completeness, though UnifiedLoginForm actually calls Supabase directly/or existing node endpoint usually?)
-// The Python version had complex logic. We will map the Python-specific endpoint here.
-// NOTE: UnifiedLoginForm calls /api/py/signup. We must implement it.
-app.post('/api/py/signup', async (req, res) => {
-  // This is a complex endpoint. For the "One Code" migration, 
-  // we direct the user to use the existing Node.js "/api/signup" logic or replicate it.
-  // However, the python version did strict duplicate checking and role insertion.
-  // For now, to keep the merge simple, we will reuse the existing Node.js signup logic 
-  // but expose it on this URL to satisfy the frontend without changing frontend code.
-
-  // Forward to existing validation schema and DB call
-  // Or simpler: Re-implement the key logic.
-
-  const { name, email, password, role, extra } = req.body;
-
-  try {
-    // 1. Check duplicate strictly
-    const { data: dup, error: dupErr } = await supabase.from('users').select('id').eq('email', email);
-    if (dup && dup.length > 0) return res.status(400).json({ detail: "Email-ID already been used" });
-
-    // 2. Auth Signup
-    const { data: authData, error: authError } = await supabase.auth.signUp({
-      email, password
-    });
-
-    if (authError) throw authError;
-    if (!authData.user) throw new Error("Signup failed");
-
-    const userId = authData.user.id;
-
-    // 3. Insert into Public Users
-    // Note: use service role key if needed for RLS, but here 'supabase' var is likely anon or service depending on init.
-    // server/index.js usually uses a service role client (check line 27/instantiation).
-    // Let's assume 'supabase' is the admin client.
-
-    await supabase.from('users').insert({
-      id: userId,
-      name: name || "Unknown",
-      email,
-      role: role || "Management",
-      extra: extra || {},
-      password_hash: "supabase_auth"
-    });
-
-    // 4. Role specific tables
-    if (role === 'Management') {
-      await supabase.from('management_managers').insert({ user_id: userId, name, email, role: 'Manager' });
-    } else if (role === 'Teacher') {
-      await supabase.from('teachers').insert({
-        user_id: userId,
-        title: extra?.title,
-        department: extra?.department,
-        institute_id: extra?.instituteId, // Mapping might vary
-        class_id: extra?.classId,
-        is_verified: false,
-        status: 'pending'
-      });
-    }
-    // ... (other roles skipped for brevity, matching standard logic is preferred)
-
-    res.json({ success: true, user: { id: userId, email, role } });
-
-  } catch (e) {
-    logger.error('Error in py/signup proxy:', e);
-    res.status(400).json({ detail: e.message });
-  }
-});
+// End of migrated endpoints (Removed duplicates)
 
 
 if (require.main === module) {
