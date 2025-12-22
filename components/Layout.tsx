@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../hooks/useAuth';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
+import axios from 'axios';
 import ThemeSwitcher from './ThemeSwitcher';
 import { useData } from '../context/DataContext';
 import Modal from './ui/Modal';
@@ -40,6 +41,38 @@ const Layout: React.FC<LayoutProps> = ({
   const [isSwitchModalOpen, setIsSwitchModalOpen] = useState(false);
   const [isChangePasswordModalOpen, setIsChangePasswordModalOpen] = useState(false);
   const [showNotificationsOpen, setShowNotificationsOpen] = useState(false);
+  const location = useLocation();
+  const [showRecoveryModal, setShowRecoveryModal] = useState(false);
+  const [retryLoading, setRetryLoading] = useState(false);
+  const [recoveryError, setRecoveryError] = useState('');
+
+  useEffect(() => {
+    if (location.state && (location.state as any).dashboardError) {
+      setShowRecoveryModal(true);
+    }
+  }, [location]);
+
+  const handleRecoveryRetry = async () => {
+    setRetryLoading(true);
+    setRecoveryError('');
+    try {
+      const res = await axios.post(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/py/restore-dashboard-state`, { user_id: user?.id });
+      if (res.data.success) {
+        // Success - Close modal and proceed
+        setShowRecoveryModal(false);
+        // Optionally update context with restored state if needed, but for now we just allow access
+      } else {
+        setRecoveryError("Error get the exact dashboard, you'll be redirected to new dashboard");
+        setTimeout(() => setShowRecoveryModal(false), 3000);
+      }
+    } catch (e) {
+      setRecoveryError("Error get the exact dashboard, you'll be redirected to new dashboard");
+      setTimeout(() => setShowRecoveryModal(false), 3000);
+      console.error(e);
+    } finally {
+      setRetryLoading(false);
+    }
+  };
 
   // Switch Account State
   const [switchEmail, setSwitchEmail] = useState('');
@@ -531,7 +564,39 @@ const Layout: React.FC<LayoutProps> = ({
           </div>
         </form>
       </Modal>
-    </div>
+
+      {/* Dashboard Recovery Modal */}
+      <Modal isOpen={showRecoveryModal} onClose={() => { /* Force user to choose */ }}>
+        <div className="text-center space-y-4">
+          <h3 className="text-xl font-bold text-red-600">Error get the exact dashboard</h3>
+          <p className="text-gray-600">
+            {recoveryError || "We couldn't restore your dashboard exactly as you left it."}
+          </p>
+          {!recoveryError && (
+            <p className="text-sm font-bold text-green-600 bg-green-50 p-2 rounded">
+              NOTE: No data will be lost
+            </p>
+          )}
+
+          <div className="flex justify-center gap-4 mt-6">
+            <Button
+              variant="secondary"
+              onClick={() => setShowRecoveryModal(false)}
+              disabled={retryLoading}
+            >
+              Okay
+            </Button>
+            <Button
+              onClick={handleRecoveryRetry}
+              disabled={retryLoading}
+            >
+              {retryLoading ? 'Retrying...' : 'Retry'}
+            </Button>
+          </div>
+          {recoveryError && <p className="text-xs text-red-500 mt-2">Redirecting...</p>}
+        </div>
+      </Modal>
+    </div >
   );
 };
 

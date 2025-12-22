@@ -2,6 +2,7 @@ import React, { useRef } from 'react';
 import Card from '../ui/Card';
 import Button from '../ui/Button';
 import { useAuth } from '../../hooks/useAuth';
+import { UserRole } from '../../types';
 
 const ProfileView: React.FC = () => {
   const { user, updateProfile } = useAuth();
@@ -44,13 +45,13 @@ const ProfileView: React.FC = () => {
           </div>
           <div className="flex-1 space-y-2">
             {/* School/Institute Name Display */}
-            {(user as any).instituteId && (
+            {((user as any).extra?.instituteName || (user as any).extra?.schoolName || (user as any).extra?.orgName || (user as any).extra?.institute_id || (user as any).instituteId) && (
               <div className="mb-4 pb-4 border-b border-[rgb(var(--border-color))]">
                 <p className="text-sm text-[rgb(var(--text-secondary-color))]">
-                  {(user as any).type === 'school' ? 'School Name' : 'Institute Name'}
+                  {(user as any).extra?.type === 'school' || (user as any).type === 'school' ? 'School Name' : 'Institute Name'}
                 </p>
                 <h2 className="text-2xl font-bold text-[rgb(var(--text-color))]">
-                  {(user as any).instituteId}
+                  {(user as any).extra?.instituteName || (user as any).extra?.schoolName || (user as any).extra?.orgName || (user as any).extra?.institute_id || (user as any).instituteId}
                 </h2>
               </div>
             )}
@@ -66,7 +67,7 @@ const ProfileView: React.FC = () => {
               <p className="text-sm text-[rgb(var(--text-secondary-color))]">Email</p>
               <p className="text-lg font-semibold">{user.email}</p>
             </div>
-            {user.role === 'management' && (
+            {user.role === UserRole.Management && (
               <div>
                 {/* Removed duplicate display */}
               </div>

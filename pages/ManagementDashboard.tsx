@@ -28,9 +28,7 @@ const ManagementDashboard: React.FC = () => {
         students, parents, addPendingTeacher, pendingTeachers: allPendingTeachers, deleteUser, deletePendingTeacher,
         pendingOrgRequests: allPendingOrgRequests, addOrgRequest, approveOrgRequest, rejectOrgRequest, deleteOrgRequest,
         // management code features added
-        createOrgCodeRequest, confirmOrgCodeRequest, orgCodes, pendingCodeRequests, getNotificationsForEmail, viewOrgCode,
-        // pending management signups
-        pendingManagementSignups, retryPendingSignup, cancelPendingSignup
+        createOrgCodeRequest, confirmOrgCodeRequest, orgCodes, pendingCodeRequests, getNotificationsForEmail, viewOrgCode
     } = useData();
 
     const isInstitute = (user as any)?.type === 'institute';
@@ -112,10 +110,7 @@ const ManagementDashboard: React.FC = () => {
     const [successMessage, setSuccessMessage] = useState('');
     const [approveRequireActivation, setApproveRequireActivation] = useState(true);
 
-    // Analytics Modal State
-    const [showAnalyticsModal, setShowAnalyticsModal] = useState(false);
-    const [analyticsModalType, setAnalyticsModalType] = useState<'dept' | 'branch' | null>(null);
-    const [selectedAnalyticsItem, setSelectedAnalyticsItem] = useState<string | null>(null);
+
 
     // Secure View Code State
     const [showViewCodeModal, setShowViewCodeModal] = useState(false);
@@ -129,6 +124,28 @@ const ManagementDashboard: React.FC = () => {
     const [activityLogs, setActivityLogs] = useState<any[]>([]);
     const [loadingLogs, setLoadingLogs] = useState(false);
     const [selectedUsers, setSelectedUsers] = useState<string[]>([]); // IDs
+
+    // Institute Code Warning Modal State
+    const [showCodeWarning, setShowCodeWarning] = useState(false);
+    const [pendingCodeReqParams, setPendingCodeReqParams] = useState<any>(null);
+
+    const handleInstituteCodeClick = (params: any) => {
+        setPendingCodeReqParams(params);
+        setShowCodeWarning(true);
+    };
+
+    const executeInstituteCodeGeneration = async () => {
+        setShowCodeWarning(false);
+        if (!pendingCodeReqParams) return;
+
+        const { orgType, instituteId, managementEmail } = pendingCodeReqParams;
+        if (!managementEmail.trim()) return setSuccessMessage('Management email is required');
+
+        const req = await createOrgCodeRequest({ orgType, instituteId, managementEmail });
+        setCodeRequestSent(req.token);
+        setSuccessMessage(`${orgType === 'institute' ? 'Institute' : 'School'} code request sent to developer`);
+        setPendingCodeReqParams(null);
+    };
 
     const copyToClipboard = (text: string) => {
         if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -404,19 +421,20 @@ const ManagementDashboard: React.FC = () => {
                                             {pendingCodeRequests?.filter(r => r.orgType === 'institute' && (r.instituteId ? r.instituteId === currentInstituteId : true)).map(req => (
                                                 <div key={req.id} className="flex justify-between items-center bg-[rgb(var(--background-color))] p-2 rounded border border-[rgb(var(--border-color))] mb-2">
                                                     <div>
-                                                        <div className="text-xs text-[rgb(var(--text-secondary-color))]">Reference Token</div>
+                                                        <div className="text-xs text-[rgb(var(--text-secondary-color))]">Request ID (Pending)</div>
                                                         <div className="font-mono font-bold text-sm text-[rgb(var(--text-color))]">{req.token}</div>
+                                                        <div className="text-xs text-red-500 font-bold">DO NOT USE FOR LOGIN</div>
                                                         <div className="text-xs text-[rgb(var(--text-secondary-color))]">{new Date(req.requestAt).toLocaleString()}</div>
                                                     </div>
                                                     <Button size="sm" onClick={async () => {
                                                         if (!req.token) return;
                                                         const res = await confirmOrgCodeRequest(req.token);
                                                         if (res && (res as any).success) {
-                                                            setSuccessMessage('Code request confirmed successfully!');
+                                                            setSuccessMessage('Code generated successfully! Check Published Codes.');
                                                         } else {
                                                             setSuccessMessage('Failed to confirm request.');
                                                         }
-                                                    }}>Simulate Dev Confirm</Button>
+                                                    }}>Approve & Generate Code</Button>
                                                 </div>
                                             ))}
                                         </div>
@@ -429,12 +447,9 @@ const ManagementDashboard: React.FC = () => {
                                                     <Input id="mgmtCodeEmailInst" label="" value={managementEmailForCode} onChange={e => setManagementEmailForCode(e.target.value)} />
                                                 </div>
                                                 <div className="col-span-2 flex gap-2">
-                                                    <Button onClick={async () => {
-                                                        if (!managementEmailForCode.trim()) return setSuccessMessage('Management email is required');
-                                                        const req = await createOrgCodeRequest({ orgType: 'institute', instituteId: currentInstituteId || undefined, managementEmail: managementEmailForCode });
-                                                        setCodeRequestSent(req.token);
-                                                        setSuccessMessage('Code request sent to developer');
-                                                    }}>Create Institute Code</Button>
+                                                    <Button onClick={() => handleInstituteCodeClick({ orgType: 'institute', instituteId: currentInstituteId || undefined, managementEmail: managementEmailForCode })}>
+                                                        Create Institute Code
+                                                    </Button>
                                                 </div>
                                             </div>
                                         </>
@@ -443,6 +458,29 @@ const ManagementDashboard: React.FC = () => {
                             ) : (
                                 <p className="text-sm text-green-600 mb-4">You have already created an Institute Code.</p>
                             )}
+
+
+
+                            {/* Warning Modal for Institute Code */}
+                            <Modal
+                                isOpen={showCodeWarning}
+                                onClose={() => setShowCodeWarning(false)}
+                            >
+                                <div className="space-y-4">
+                                    <h3 className="text-xl font-bold">Important Security Warning</h3>
+                                    <div className="p-4 bg-yellow-50 border-l-4 border-yellow-400 text-yellow-700">
+                                        <p className="font-bold text-lg">Avoid sharing Institute code outside the institute</p>
+                                        <p className="mt-2 text-sm">
+                                            The code is used to connect among the management, teacher, and student.
+                                            Ensure it is distributed only to authorized personnel.
+                                        </p>
+                                    </div>
+                                    <div className="flex justify-end gap-3 mt-6">
+                                        <Button variant="outline" onClick={() => setShowCodeWarning(false)}>Cancel</Button>
+                                        <Button onClick={executeInstituteCodeGeneration}>I Understand, Generate Code</Button>
+                                    </div>
+                                </div>
+                            </Modal>
 
                             <div className="mt-4">
                                 <h5 className="font-semibold">Published Codes</h5>
@@ -502,26 +540,6 @@ const ManagementDashboard: React.FC = () => {
                             </Card>
                         )}
 
-                        <div className="mt-4">
-                            <h5 className="font-semibold">Pending Management Signups</h5>
-                            {pendingManagementSignups.filter(p => !p.email || (p.email && (p.email.includes('@') ? true : true))).length === 0 && (
-                                <p className="text-gray-500">No queued signups pending synchronization.</p>
-                            )}
-                            <div className="space-y-2 mt-2">
-                                {pendingManagementSignups.map(p => (
-                                    <div key={p.id} className="p-2 bg-[rgb(var(--subtle-background-color))] rounded flex items-center justify-between">
-                                        <div className="flex-1">
-                                            <div className="font-semibold">{p.email} <span className="text-xs text-gray-400">(created {new Date(p.createdAt).toLocaleString()})</span></div>
-                                            <div className="text-xs text-[rgb(var(--text-secondary-color))]">Attempts: {p.attempts || 0} {p.error ? `• Error: ${p.error}` : ''}</div>
-                                        </div>
-                                        <div className="flex gap-2 ml-4">
-                                            <Button size="sm" variant="secondary" onClick={() => retryPendingSignup(p.id)}>Retry</Button>
-                                            <Button size="sm" variant="outline" onClick={() => cancelPendingSignup(p.id)}>Cancel</Button>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
                     </div>
                 );
 
@@ -545,25 +563,26 @@ const ManagementDashboard: React.FC = () => {
                                             {pendingCodeRequests?.filter(r => r.orgType === 'school' && (r.instituteId ? r.instituteId === currentInstituteId : true)).map(req => (
                                                 <div key={req.id} className="flex justify-between items-center bg-[rgb(var(--background-color))] p-2 rounded border border-[rgb(var(--border-color))] mb-2">
                                                     <div>
-                                                        <div className="text-xs text-[rgb(var(--text-secondary-color))]">Reference Token</div>
+                                                        <div className="text-xs text-[rgb(var(--text-secondary-color))]">Request ID (Pending)</div>
                                                         <div className="font-mono font-bold text-sm text-[rgb(var(--text-color))]">{req.token}</div>
+                                                        <div className="text-xs text-red-500 font-bold">DO NOT USE FOR LOGIN</div>
                                                         <div className="text-xs text-[rgb(var(--text-secondary-color))]">{new Date(req.requestAt).toLocaleString()}</div>
                                                     </div>
                                                     <Button size="sm" onClick={async () => {
                                                         if (!req.token) return;
                                                         const res = await confirmOrgCodeRequest(req.token);
                                                         if (res && (res as any).success) {
-                                                            setSuccessMessage('Code request confirmed successfully!');
+                                                            setSuccessMessage('Code generated successfully! Check Published Codes.');
                                                         } else {
                                                             setSuccessMessage('Failed to confirm request.');
                                                         }
-                                                    }}>Simulate Dev Confirm</Button>
+                                                    }}>Approve & Generate Code</Button>
                                                 </div>
                                             ))}
                                         </div>
                                     ) : (
                                         <>
-                                            <p className="text-sm text-gray-500 mb-2">Create School code — after creating, send an email to developer for confirmation to finalize the code.</p>
+                                            <p className="text-sm text-[rgb(var(--text-color))] font-bold mb-2">Create School code — after creating, send an email to developer for confirmation to finalize the code.</p>
                                             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
                                                 <div>
                                                     <label className="block text-sm font-medium mb-1">Management email to receive final code</label>
@@ -587,7 +606,7 @@ const ManagementDashboard: React.FC = () => {
 
                             <div className="mt-4">
                                 <h5 className="font-semibold">Published Codes</h5>
-                                {existingSchoolCodes.length === 0 && <p className="text-gray-500">No codes yet.</p>}
+                                {existingSchoolCodes.length === 0 && <p className="text-[rgb(var(--text-color))] font-bold">No codes yet.</p>}
                                 <div className="space-y-2 mt-2">
                                     {existingSchoolCodes.map(c => (
                                         <div key={c.id} className="p-2 bg-[rgb(var(--subtle-background-color))] rounded flex items-center justify-between">
@@ -615,7 +634,7 @@ const ManagementDashboard: React.FC = () => {
 
                         <Card className="p-6">
                             <h4 className="text-lg font-bold mb-3">Pending School Requests</h4>
-                            {allPendingOrgRequests.filter(r => r.orgType === 'school' && r.status === 'pending' && (r.instituteId ? r.instituteId === currentInstituteId : true)).length === 0 && <p className="text-gray-500">No pending requests for this school.</p>}
+                            {allPendingOrgRequests.filter(r => r.orgType === 'school' && r.status === 'pending' && (r.instituteId ? r.instituteId === currentInstituteId : true)).length === 0 && <p className="text-[rgb(var(--text-color))] font-bold">No pending requests for this school.</p>}
                             <div className="space-y-2">
                                 {allPendingOrgRequests.filter(r => r.orgType === 'school' && r.status === 'pending' && (r.instituteId ? r.instituteId === currentInstituteId : true)).map(req => (
                                     <div key={req.id} className="p-3 bg-[rgb(var(--subtle-background-color))] rounded flex justify-between items-center">
@@ -824,80 +843,12 @@ const ManagementDashboard: React.FC = () => {
                 );
 
 
-            case 'Analytics':
-                return (
-                    <div className="space-y-6">
-                        <h3 className="text-2xl font-bold mb-4">Institute Analytics</h3>
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
 
-                            <Card className="p-6 text-center">
-                                <h4 className="text-lg font-bold text-[rgb(var(--text-color))]">Total Teachers</h4>
-                                <p className="text-4xl font-extrabold text-[#1e3a8a] mt-2">{teachers.length}</p>
-                            </Card>
-                            <Card className="p-6 text-center">
-                                <h4 className="text-lg font-bold text-[rgb(var(--text-color))]">Total Classes</h4>
-                                <p className="text-4xl font-extrabold text-[#1e3a8a] mt-2">{visibleClasses.length}</p>
-                            </Card>
-                            <Card className="p-6 text-center">
-                                <h4 className="text-lg font-bold text-[rgb(var(--text-color))]">Departments</h4>
-                                <p className="text-4xl font-extrabold text-[#1e3a8a] mt-2">{visibleDepartments.length}</p>
-                            </Card>
-                        </div>
-
-                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                            <Card className="p-6">
-                                <h4 className="text-lg font-bold mb-4">Department Distribution</h4>
-                                <div className="space-y-2">
-                                    {visibleDepartments.map(d => {
-                                        const count = teachers.filter(t => (t as TeacherExtended).department === d.name).length;
-                                        return (
-                                            <div
-                                                key={d.id}
-                                                className="flex justify-between items-center p-2 hover:bg-[rgb(var(--subtle-background-color))] rounded cursor-pointer transition-colors"
-                                                onClick={() => {
-                                                    setSelectedAnalyticsItem(d.name);
-                                                    setAnalyticsModalType('dept');
-                                                    setShowAnalyticsModal(true);
-                                                }}
-                                            >
-                                                <span className="text-blue-600 hover:underline">{d.name}</span>
-                                                <span className="font-bold">{count} Teachers</span>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            </Card>
-                            <Card className="p-6">
-                                <h4 className="text-lg font-bold mb-4">Branch Details</h4>
-                                <div className="space-y-2">
-                                    {Array.from(new Set(visibleClasses.map(c => c.name.includes('-') ? c.name.split('-')[0] : c.name))).map(branch => {
-                                        const sectionCount = visibleClasses.filter(c => c.name === branch || c.name.startsWith(branch + '-')).length;
-                                        return (
-                                            <div
-                                                key={branch}
-                                                className="flex justify-between items-center p-2 hover:bg-[rgb(var(--subtle-background-color))] rounded cursor-pointer transition-colors"
-                                                onClick={() => {
-                                                    setSelectedAnalyticsItem(branch);
-                                                    setAnalyticsModalType('branch');
-                                                    setShowAnalyticsModal(true);
-                                                }}
-                                            >
-                                                <span className="text-blue-600 hover:underline">{branch}</span>
-                                                <span className="font-bold">{sectionCount} Section{sectionCount !== 1 ? 's' : ''}</span>
-                                            </div>
-                                        );
-                                    })}
-                                    {visibleClasses.length === 0 && <p className="text-gray-500">No classes found.</p>}
-                                </div>
-                            </Card>
-                        </div>
-                    </div>
-                );
             case 'Profile':
                 return <ProfileView />;
             case 'Notifications':
                 return <ManagementNotifications />;
-            case 'Pending Signups':
+            case 'Requests':
                 return <ManagementSignupsContent />;
             default:
                 return <div>Select a tab</div>;
@@ -918,10 +869,10 @@ const ManagementDashboard: React.FC = () => {
         isInstitute
             ? { name: 'Institute Management', icon: <Icon path="M3 13.5V6.75a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 6.75v6.75M3 13.5a2.25 2.25 0 002.25 2.25h13.5A2.25 2.25 0 0021 13.5" /> }
             : { name: 'School Management', icon: <Icon path="M12 7l5 3.5V18a2 2 0 01-2 2H9a2 2 0 01-2-2V10.5L12 7z" /> },
-        { name: 'Pending Signups', icon: <Icon path="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a6 6 0 00-6 6h12a6 6 0 00-6-6z" /> },
+        { name: 'Requests', icon: <Icon path="M12 7.5h1.5m-1.5 3h1.5m-7.5 3h7.5m-7.5 3h7.5m3-9h3.375c.621 0 1.125.504 1.125 1.125V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18V6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25h-3.375" /> },
         { name: 'Role Management', icon: <Icon path="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" /> },
         { name: 'Department', icon: <Icon path="M3.75 21h16.5M4.5 3h15M5.25 3v18m13.5-18v18M9 6.75h1.5m-1.5 3h1.5m-1.5 3h1.5m3-6H15m-1.5 3H15m-1.5 3H15M9 21v-3.375c0-.621.504-1.125 1.125-1.125h3.75c.621 0 1.125.504 1.125 1.125V21" /> },
-        { name: 'Analytics', icon: <Icon path="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" /> },
+
         { name: 'Notifications', icon: <Icon path="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" /> },
         { name: 'Profile', icon: <Icon path="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.5 19.5a8.25 8.25 0 0115 0" /> }
     ];
@@ -930,6 +881,15 @@ const ManagementDashboard: React.FC = () => {
     useEffect(() => {
         setSuccessMessage('');
     }, [user]);
+
+    useEffect(() => {
+        if (successMessage) {
+            const timer = setTimeout(() => {
+                setSuccessMessage('');
+            }, 2500);
+            return () => clearTimeout(timer);
+        }
+    }, [successMessage]);
 
     return (
         <Layout navItems={navItems} activeItem={activeTab} setActiveItem={setActiveTab} profileNavItemName="Profile">
@@ -968,45 +928,7 @@ const ManagementDashboard: React.FC = () => {
                 </div>
             </Modal>
 
-            <Modal isOpen={showAnalyticsModal} onClose={() => setShowAnalyticsModal(false)}>
-                <div className="space-y-4">
-                    <h3 className="text-xl font-bold">
-                        {analyticsModalType === 'dept' ? `Teachers in ${selectedAnalyticsItem}` : `Sections in ${selectedAnalyticsItem}`}
-                    </h3>
 
-                    <div className="max-h-[60vh] overflow-y-auto">
-                        {analyticsModalType === 'dept' && (
-                            <div className="space-y-2">
-                                {teachers.filter(t => (t as TeacherExtended).department === selectedAnalyticsItem).map(t => (
-                                    <div key={t.id} className="p-3 bg-[rgb(var(--subtle-background-color))] rounded">
-                                        <p className="font-bold">{t.name}</p>
-                                        <p className="text-sm text-gray-500">{t.email}</p>
-                                        <p className="text-xs text-gray-400">{(t as TeacherExtended).title || 'Teacher'}</p>
-                                    </div>
-                                ))}
-                                {teachers.filter(t => (t as TeacherExtended).department === selectedAnalyticsItem).length === 0 && (
-                                    <p className="text-[rgb(var(--text-color))] font-bold italic">No teachers found in this department.</p>
-                                )}
-                            </div>
-                        )}
-
-                        {analyticsModalType === 'branch' && (
-                            <div className="space-y-2">
-                                {classes.filter(c => c.name === selectedAnalyticsItem || c.name.startsWith(selectedAnalyticsItem + '-')).map(c => (
-                                    <div key={c.id} className="p-3 bg-[rgb(var(--subtle-background-color))] rounded flex justify-between items-center">
-                                        <span className="font-bold">{c.name}</span>
-                                        <span className="text-xs text-gray-500">ID: {c.id.substring(0, 8)}...</span>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="flex justify-end mt-6">
-                        <Button onClick={() => setShowAnalyticsModal(false)}>Close</Button>
-                    </div>
-                </div>
-            </Modal>
 
             <Modal isOpen={showOrgPeopleModal} onClose={() => setShowOrgPeopleModal(false)}>
                 <div className="space-y-4">

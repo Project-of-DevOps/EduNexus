@@ -1,155 +1,141 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Layout from '../components/Layout';
 import { useData } from '../context/DataContext';
 import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
-
+import { useAuth } from '../hooks/useAuth';
+import axios from 'axios';
 
 export const ManagementSignupsContent: React.FC = () => {
-  const { pendingManagementSignups, retryPendingSignup, cancelPendingSignup } = useData();
-  const [auditRows, setAuditRows] = useState<any[] | null>(null);
-  const [loadingAudit, setLoadingAudit] = useState(false);
-  const [serverQueue, setServerQueue] = useState<any[] | null>(null);
-  const [loadingQueue, setLoadingQueue] = useState(false);
-  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const { user } = useAuth();
+  // Using local state for requests
+  const [requests, setRequests] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [successMsg, setSuccessMsg] = useState('');
 
-  const fetchAudit = async () => {
-    setLoadingAudit(true);
+  const currentInstituteId = (user as any)?.instituteId || null;
+
+  const fetchRequests = async () => {
+    setLoading(true);
+    setError('');
     try {
-      const apiUrl = (import.meta as any).env?.VITE_API_URL || 'http://localhost:4000';
-      const r = await fetch(`${apiUrl}/api/sync-audit`);
-      const json = await r.json();
-      if (json && json.rows) setAuditRows(json.rows);
-    } catch (e) {
-      setAuditRows([{ error: String(e) }]);
-    } finally { setLoadingAudit(false); }
-  };
+      // Use Python Service directly (Port 8000)
+      const pythonUrl = `http://${window.location.hostname}:8000`;
+      // Ideally pass instituteId if available to filter on server
+      const url = currentInstituteId
+        ? `${pythonUrl}/api/py/management/pending-teachers?institute_id=${currentInstituteId}`
+        : `${pythonUrl}/api/py/management/pending-teachers`;
 
-  const fetchServerQueue = async (status?: string) => {
-    setLoadingQueue(true);
-    try {
-      const apiUrl = (import.meta as any).env?.VITE_API_URL || 'http://localhost:4000';
-      const q = status ? `?status=${encodeURIComponent(status)}` : '';
-      const r = await fetch(`${apiUrl}/api/queue-signups${q}`);
-      const json = await r.json();
-      if (json && json.rows) setServerQueue(json.rows);
-    } catch (e) {
-      setServerQueue([{ error: String(e) }]);
-    } finally { setLoadingQueue(false); }
-  };
-
-  const toggleSelect = (id: number) => {
-    setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
-  };
-
-  const bulkRetry = async () => {
-    if (!selectedIds.length) return;
-    const apiUrl = (import.meta as any).env?.VITE_API_URL || 'http://localhost:4000';
-    const r = await fetch(`${apiUrl}/api/queue-signups/bulk-retry`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: selectedIds }) });
-    const json = await r.json();
-    // refresh both queue and audit
-    await fetchServerQueue();
-    await fetchAudit();
-    setSelectedIds([]);
-    return json;
-  };
-
-  const bulkDelete = async () => {
-    if (!selectedIds.length) return;
-    const apiUrl = (import.meta as any).env?.VITE_API_URL || 'http://localhost:4000';
-    for (const id of selectedIds) {
-      await fetch(`${apiUrl}/api/queue-signups/${id}`, { method: 'DELETE' });
+      const res = await axios.get(url, { withCredentials: true });
+      if (res.data) {
+        setRequests(res.data);
+      }
+    } catch (e: any) {
+      console.error(e);
+      const msg = e.response?.data?.detail || e.message || 'Failed to fetch requests';
+      setError(msg);
+    } finally {
+      setLoading(false);
     }
-    await fetchServerQueue();
-    setSelectedIds([]);
   };
+
+  useEffect(() => {
+    fetchRequests();
+  }, [user]);
+
+  const handleApprove = async (userId: string) => {
+    try {
+      const pythonUrl = `http://${window.location.hostname}:8000`;
+      await axios.post(`${pythonUrl}/api/py/management/approve-teacher`, { user_id: userId }, { withCredentials: true });
+      setSuccessMsg('Request Approved');
+      fetchRequests();
+    } catch (e) {
+      console.error(e);
+      setError('Failed to approve request');
+    }
+  };
+
+  const handleReject = async (userId: string) => {
+    try {
+      const pythonUrl = `http://${window.location.hostname}:8000`;
+      await axios.post(`${pythonUrl}/api/py/management/reject-teacher`, { user_id: userId }, { withCredentials: true });
+      setSuccessMsg('Request Rejected');
+      fetchRequests();
+    } catch (e) {
+      console.error(e);
+      setError('Failed to reject request');
+    }
+  };
+
+  // Clear success message after 3s
+  useEffect(() => {
+    if (successMsg) {
+      const t = setTimeout(() => setSuccessMsg(''), 3000);
+      return () => clearTimeout(t);
+    }
+  }, [successMsg]);
 
   return (
     <div className="space-y-6 p-6">
-      <h2 className="text-2xl font-bold">Pending Management Signups</h2>
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-bold">Requests</h2>
+        <Button onClick={fetchRequests} disabled={loading}>{loading ? 'Loading...' : 'Refresh Queue'}</Button>
+      </div>
+
+      {successMsg && (
+        <div className="p-4 bg-green-100 text-green-800 rounded border border-green-200">
+          {successMsg}
+        </div>
+      )}
+      {error && (
+        <div className="p-4 bg-red-100 text-red-800 rounded border border-red-200">
+          {error}
+        </div>
+      )}
 
       <Card className="p-4">
+        {requests.length === 0 && !loading && <p className="text-gray-500 font-bold italic">No pending requests.</p>}
+
         <div className="space-y-2">
-          {pendingManagementSignups.length === 0 && <p className="text-[rgb(var(--text-color))] font-bold italic">No queued signups.</p>}
-          {pendingManagementSignups.map(p => (
-            <div key={p.id} className="flex justify-between items-center p-2 bg-[rgb(var(--subtle-background-color))] rounded">
-              <div>
-                <div className="font-semibold">{p.email}</div>
-                <div className="text-xs text-[rgb(var(--text-color))] font-bold">Created: {new Date(p.createdAt).toLocaleString()} • Attempts: {p.attempts || 0} {p.error ? `• ${p.error}` : ''}</div>
-              </div>
-              <div className="flex gap-2">
-                <Button size="sm" variant="secondary" onClick={() => retryPendingSignup(p.id)}>Retry</Button>
-                <Button size="sm" variant="outline" onClick={() => cancelPendingSignup(p.id)}>Cancel</Button>
-              </div>
-            </div>
-          ))}
-        </div>
-      </Card>
+          {requests.map(req => {
+            // Extract data from joined user object if available
+            // Structure from backend: { ..., users: { name, email, extra: { title, ... } } }
+            const name = req.users?.name || 'Unknown';
+            const email = req.users?.email || 'No Email';
+            // Title is crucial as requested
+            const title = req.users?.extra?.title || req.title || 'Teacher';
+            const dept = req.department || req.users?.extra?.department || 'N/A';
 
-      <div className="flex items-center justify-between gap-6">
-        <h3 className="text-lg font-semibold">Server Sync Audit</h3>
-        <div className="flex gap-2">
-          <Button onClick={fetchAudit} disabled={loadingAudit}>{loadingAudit ? 'Loading...' : 'Refresh Audit'}</Button>
-        </div>
-      </div>
-
-      <Card className="p-4">
-        {auditRows == null && <p className="text-[rgb(var(--text-color))] font-bold italic">Click "Refresh Audit" to load recent signup sync events from the server.</p>}
-        {auditRows && auditRows.length === 0 && <p className="text-[rgb(var(--text-color))] font-bold italic">No audit rows available.</p>}
-        {auditRows && auditRows.length > 0 && (
-          <div className="space-y-2">
-            {auditRows.map((r: any) => (
-              <div key={r.id || r.email} className="p-2 rounded bg-[rgb(var(--subtle-background-color))]">
-                <div className="font-mono text-sm">{r.email} — {r.status} — attempts: {r.attempts || 0}</div>
-                <div className="text-xs text-[rgb(var(--text-color))] font-bold">{r.note || ''} • {r.created_at ? new Date(r.created_at).toLocaleString() : ''}</div>
-              </div>
-            ))}
-          </div>
-        )}
-      </Card>
-      <div className="mt-4 flex items-center justify-between">
-        <h3 className="text-lg font-semibold">Server Queue</h3>
-        <div className="flex gap-2">
-          <Button onClick={() => fetchServerQueue()} disabled={loadingQueue}>{loadingQueue ? 'Loading...' : 'Refresh Queue'}</Button>
-          <Button onClick={bulkRetry} disabled={!selectedIds.length}>Retry Selected</Button>
-          <Button variant="danger" onClick={bulkDelete} disabled={!selectedIds.length}>Delete Selected</Button>
-        </div>
-      </div>
-
-      <Card className="p-4 mt-2">
-        {serverQueue == null && <p className="text-[rgb(var(--text-color))] font-bold italic">Click "Refresh Queue" to load queued signups from the server.</p>}
-        {serverQueue && serverQueue.length === 0 && <p className="text-[rgb(var(--text-color))] font-bold italic">No server queued signups.</p>}
-        {serverQueue && serverQueue.length > 0 && (
-          <div className="space-y-2">
-            {serverQueue.map((row: any) => (
-              <div key={row.id || row.email} className="p-2 rounded bg-[rgb(var(--subtle-background-color))] flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <input type="checkbox" checked={selectedIds.includes(row.id)} onChange={() => toggleSelect(row.id)} />
-                  <div>
-                    <div className="font-semibold">{row.email}</div>
-                    <div className="text-xs text-[rgb(var(--text-color))] font-bold">{row.status} • attempts: {row.attempts || 0}</div>
-                  </div>
+            return (
+              <div key={req.user_id} className="flex justify-between items-center p-3 bg-[rgb(var(--subtle-background-color))] rounded border border-[rgb(var(--border-color))]">
+                <div>
+                  <div className="font-bold text-lg">{title} <span className="text-sm font-normal text-gray-500">({dept})</span></div>
+                  <div className="font-semibold">{name}</div>
+                  <div className="text-xs text-gray-400">{email}</div>
                 </div>
                 <div className="flex gap-2">
-                  <Button size="sm" variant="secondary" onClick={async () => { await fetch(`${(import.meta as any).env?.VITE_API_URL || 'http://localhost:4000'}/api/queue-signups/${row.id}/retry`, { method: 'POST' }); await fetchServerQueue(); await fetchAudit(); }}>Retry</Button>
-                  <Button size="sm" variant="outline" onClick={async () => { await fetch(`${(import.meta as any).env?.VITE_API_URL || 'http://localhost:4000'}/api/queue-signups/${row.id}`, { method: 'DELETE' }); await fetchServerQueue(); }}>Cancel</Button>
+                  <Button size="sm" onClick={() => handleApprove(req.user_id)}>Accept</Button>
+                  <Button size="sm" variant="danger" onClick={() => handleReject(req.user_id)}>Reject</Button>
                 </div>
               </div>
-            ))}
-          </div>
-        )}
+            );
+          })}
+        </div>
       </Card>
+
+      {/* Old sections removed as requested */}
     </div>
   );
 };
 
 const ManagementSignups: React.FC = () => {
+  // If navigated directly
   return (
-    <Layout navItems={[]} activeItem="Pending Signups" setActiveItem={() => { }} profileNavItemName="Profile">
+    <Layout navItems={[]} activeItem="Requests" setActiveItem={() => { }} profileNavItemName="Profile">
       <ManagementSignupsContent />
     </Layout>
   );
 };
 
 export default ManagementSignups;
-

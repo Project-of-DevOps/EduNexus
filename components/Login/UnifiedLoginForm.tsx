@@ -59,11 +59,49 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
         }
     }, [isLogin]);
 
+    // Force Reset Theme to Default (Ocean Depth) for Login Page
+    useEffect(() => {
+        const root = document.documentElement;
+        // Default Ocean Depth colors
+        const defaultTheme = {
+            primary: '#3B82F6',
+            background: '#172554',
+            surface: '#1E3A8A',
+            textMain: '#EFF6FF',
+            textSecondary: '#BFDBFE',
+            accentTint: '#1E40AF',
+            highlight: '#22D3EE',
+            subtle: '#172554',
+            border: '#1E40AF'
+        };
+
+        const hexToRgb = (hex: string): string => {
+            const r = parseInt(hex.slice(1, 3), 16);
+            const g = parseInt(hex.slice(3, 5), 16);
+            const b = parseInt(hex.slice(5, 7), 16);
+            return `${r} ${g} ${b}`;
+        };
+
+        root.style.setProperty('--primary-color', hexToRgb(defaultTheme.primary));
+        root.style.setProperty('--background-color', hexToRgb(defaultTheme.background));
+        const surfaceRgb = hexToRgb(defaultTheme.surface);
+        root.style.setProperty('--surface-color', surfaceRgb);
+        root.style.setProperty('--foreground-color', surfaceRgb);
+        root.style.setProperty('--text-color', hexToRgb(defaultTheme.textMain));
+        root.style.setProperty('--text-secondary-color', hexToRgb(defaultTheme.textSecondary));
+        root.style.setProperty('--accent-tint-color', hexToRgb(defaultTheme.accentTint));
+        root.style.setProperty('--subtle-background-color', hexToRgb(defaultTheme.subtle));
+        root.style.setProperty('--input-bg', hexToRgb(defaultTheme.subtle));
+        root.style.setProperty('--border-color', hexToRgb(defaultTheme.border));
+        root.style.setProperty('--highlight-color', hexToRgb(defaultTheme.highlight));
+
+    }, []);
+
     // Form State
     const [email, setEmail] = useState(prefill?.email || '');
     const [password, setPassword] = useState('');
     const [uniqueId, setUniqueId] = useState(prefill?.uniqueId || ''); // For Management/Student/Teacher/Parent
-    const [orgType, setOrgType] = useState<'school' | 'institute'>(prefill?.orgType || 'school'); // For Management/Student/Teacher/Parent
+    const [orgType, setOrgType] = useState<'school' | 'institute' | null>(prefill?.orgType || null); // For Management/Student/Teacher/Parent
     const [name, setName] = useState(''); // For Signup
     const [instituteName, setInstituteName] = useState(''); // For Signup
     const [accessCode, setAccessCode] = useState(''); // For Student/Parent Signup
@@ -95,6 +133,8 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
     const [popupError, setPopupError] = useState<string | null>(null);
     const [ssoMissing, setSsoMissing] = useState(false);
     const [ssoUsers, setSsoUsers] = useState<Array<{ id: string; role: string; name?: string; email?: string }>>([]);
+
+    const [approvalStatus, setApprovalStatus] = useState<'pending' | 'rejected' | null>(null);
 
     // Inline Validation State
     const [emailError, setEmailError] = useState('');
@@ -247,47 +287,58 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
         }
         setEmailError('');
 
-        if (isLogin) {
-            setLoading(true);
-            try {
-                // Use Python Service (Port 8000) for check-email
-                const pythonUrl = `http://${window.location.hostname}:8000`;
-                const res = await fetch(`${pythonUrl}/api/py/check-email`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email })
-                });
+        // Check email for both Login and Signup
+        setLoading(true);
+        try {
+            const pythonUrl = `http://${window.location.hostname}:8000`;
+            const res = await fetch(`${pythonUrl}/api/py/check-email`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email })
+            });
 
-                if (res.ok) {
-                    const json = await res.json();
-                    if (!json.exists) {
-                        setLoading(false);
-                        // Show centered popup instead of inline error
-                        setPopupError('User not registered , Consider registering before sign-in');
-                        setTimeout(() => setPopupError(null), 4000);
-                        return;
-                    }
-                } else {
-                    // Endpoint failed or Server Error
-                    console.warn('Email check returned status:', res.status);
+            const json = await res.json().catch(() => ({}));
+
+            if (isLogin) {
+                if (res.ok && !json.exists) {
                     setLoading(false);
-                    // If endpoint missing (404) or error (500), safely block
-                    setPopupError('System Error: Unable to verify email. Check server connection.');
+                    setPopupError('User not registered , Consider registering before sign-in');
                     setTimeout(() => setPopupError(null), 4000);
                     return;
                 }
-            } catch (e) {
-                console.warn('Email check failed', e);
-                // On error, we might choose to block or allow. Blocking is safer for "don't let next page"
+            } else {
+                // Signup: Check if ALREADY exists
+                if (res.ok && json.exists) {
+                    setLoading(false);
+                    setEmailError('Email-ID already exist');
+                    setTimeout(() => setEmailError(''), 2500);
+                    return;
+                }
+            }
+        } catch (e) {
+            console.warn('Email check failed', e);
+            if (isLogin) {
                 setLoading(false);
                 setPopupError('Unable to verify email. Please try again.');
                 setTimeout(() => setPopupError(null), 4000);
                 return;
             }
-            setLoading(false);
         }
 
+        setLoading(false);
+
         setEmailSubmitted(true);
+    };
+
+    // Real-time error clearing for Code/Name
+    const handleInstituteNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        setInstituteName(e.target.value);
+        if (error.includes("Mismatch") || error.includes("Wrong Input")) setError('');
+    };
+
+    const handleUniqueIdChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        setUniqueId(e.target.value);
+        if (error === "Invalid Code") setError('');
     };
 
     const handleResetFlow = () => {
@@ -391,7 +442,7 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                 } else {
                     localStorage.removeItem('edunexus:remember_me');
                 }
-                navigateDashboard();
+                navigateDashboard({ dashboardError: result.dashboard_error });
             } else {
                 throw new Error(result.error || 'Invalid OTP');
             }
@@ -400,12 +451,12 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
         }
     };
 
-    const navigateDashboard = () => {
-        if (activeRole === UserRole.Management) navigate('/dashboard/management');
-        else if (activeRole === UserRole.Librarian) navigate('/dashboard/librarian');
-        else if (activeRole === UserRole.Teacher) navigate('/dashboard/teacher');
-        else if (activeRole === UserRole.Parent) navigate('/dashboard/parent');
-        else navigate('/dashboard');
+    const navigateDashboard = (state?: any) => {
+        const target = activeRole === UserRole.Management ? '/dashboard/management' :
+            activeRole === UserRole.Librarian ? '/dashboard/librarian' :
+                activeRole === UserRole.Teacher ? '/dashboard/teacher' :
+                    activeRole === UserRole.Parent ? '/dashboard/parent' : '/dashboard';
+        navigate(target, { state });
     };
 
     const handleSsoRoleSelect = async (chosen: { id: string; role: string; email?: string }) => {
@@ -550,6 +601,10 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                 if (activeRole !== UserRole.Librarian && activeRole !== UserRole.Management) {
                     extras.uniqueId = uniqueId;
                 }
+                // ALWAYS send orgType if available (for Management AND Teachers/Students)
+                if (activeRole !== UserRole.Librarian) {
+                    extras.orgType = orgType;
+                }
                 extras.rememberMe = rememberMe;
 
                 const result = await login(email, password, activeRole as UserRole, extras);
@@ -566,9 +621,16 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                     } else {
                         localStorage.removeItem('edunexus:remember_me');
                     }
-                    navigateDashboard();
+                    navigateDashboard({ dashboardError: result.dashboard_error });
+                    localStorage.removeItem('edunexus:remember_me');
                 } else {
-                    setError(result.error || 'Invalid credentials.');
+                    if (result.error && result.error.includes("Waiting for Management Approval")) {
+                        setApprovalStatus('pending');
+                    } else if (result.error && result.error.includes("Request was Rejected")) {
+                        setApprovalStatus('rejected');
+                    } else {
+                        setError(result.error || 'Invalid credentials.');
+                    }
                 }
             } else {
                 // Sign Up Logic
@@ -604,17 +666,18 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                     if (classInChargeId) extras.classId = classInChargeId;
                 } else if (activeRole === UserRole.Management) {
                     extras.title = managementTitle;
+                    extras.instituteName = instituteName;
                 } else if (activeRole === UserRole.Parent || activeRole === UserRole.Student) {
                     extras.rollNumber = rollNumber;
                 }
 
-                const ok = await signUp(name, email, password, activeRole as UserRole, extras);
-                if (ok) {
+                const result = await signUp(name, email, password, activeRole as UserRole, extras);
+                if (result.success) {
                     if (activeRole === UserRole.Teacher && pendingTeacher) consumeTeacherCode(uniqueId);
                     // Instead of navigating immediately, ask to link Google
                     setShowGoogleLinkModal(true);
                 } else {
-                    setError('Sign-up failed. Please try again.');
+                    setError(result.error || 'Sign-up failed. Please try again.');
                 }
             }
         } catch (err) {
@@ -665,6 +728,40 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                 </div>
             )}
 
+            {approvalStatus === 'pending' && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-30 backdrop-blur-sm">
+                    <div className="bg-white border-l-4 border-yellow-500 rounded-lg p-8 shadow-2xl max-w-sm w-full mx-4 animate-in zoom-in-95 duration-200">
+                        <div className="text-center space-y-4">
+                            <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-yellow-100">
+                                <svg className="h-6 w-6 text-yellow-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                            </div>
+                            <h3 className="text-lg font-bold text-gray-900">Waiting for Management Approval</h3>
+                            <p className="text-sm text-gray-500">Your account is currently under review by the management. Please try again later.</p>
+                            <Button onClick={() => setApprovalStatus(null)}>Close</Button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {approvalStatus === 'rejected' && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-30 backdrop-blur-sm">
+                    <div className="bg-white border-l-4 border-red-600 rounded-lg p-8 shadow-2xl max-w-sm w-full mx-4 animate-in zoom-in-95 duration-200">
+                        <div className="text-center space-y-4">
+                            <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-red-100">
+                                <svg className="h-6 w-6 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                            </div>
+                            <h3 className="text-lg font-bold text-gray-900">Request was Rejected</h3>
+                            <p className="text-sm text-gray-500">Your registration request was rejected by the management.</p>
+                            <Button onClick={() => setApprovalStatus(null)}>Close</Button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {ssoUsers && ssoUsers.length > 0 && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center">
                     <div className="mx-4 w-full max-w-lg pointer-events-auto">
@@ -708,14 +805,14 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                     <div className="flex justify-start space-x-6 mb-8 border-b border-gray-200">
                         <button
                             type="button"
-                            onClick={() => { setIsLogin(true); setError(''); }}
+                            onClick={() => { setIsLogin(true); setError(''); setEmailError(''); setEmailSubmitted(false); setPassword(''); setSuccessMessage(''); }}
                             className={`pb-3 text-base font-medium transition-all relative ${isLogin ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-900 border-b-2 border-transparent'}`}
                         >
                             Sign In
                         </button>
                         <button
                             type="button"
-                            onClick={() => { setIsLogin(false); setError(''); }}
+                            onClick={() => { setIsLogin(false); setError(''); setEmailError(''); setEmailSubmitted(false); setPassword(''); setSuccessMessage(''); }}
                             className={`pb-3 text-base font-medium transition-all relative ${!isLogin ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-900 border-b-2 border-transparent'}`}
                         >
                             Sign Up
@@ -742,21 +839,48 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                                 />
                                 <Button
                                     type="submit"
-                                    className="w-full py-3 text-lg font-semibold shadow-md transition-transform active:scale-[0.98]"
+                                    className="w-full py-3 text-lg font-semibold shadow-md transition-transform active:scale-[0.98] bg-blue-600 hover:bg-blue-700 text-white border-transparent"
                                 >
                                     Continue
                                 </Button>
 
                                 <div className="mt-6">
                                     {isLogin && (
-                                        <div className="relative">
-                                            <div className="absolute inset-0 flex items-center">
-                                                <div className="w-full border-t border-gray-300"></div>
+                                        <>
+                                            <div className="relative">
+                                                <div className="absolute inset-0 flex items-center">
+                                                    <div className="w-full border-t border-gray-300"></div>
+                                                </div>
+                                                <div className="relative flex justify-center text-sm">
+                                                    <span className="px-2 bg-white text-gray-500">Or continue with</span>
+                                                </div>
                                             </div>
-                                            <div className="relative flex justify-center text-sm">
-                                                <span className="px-2 bg-white text-gray-500">Or continue with</span>
-                                            </div>
-                                        </div>
+                                            {/* Additional Fields for Login (Teacher/Management) */}
+                                            {isLogin && activeRole === UserRole.Teacher && (
+                                                <>
+                                                    <Input
+                                                        id="uniqueId"
+                                                        label={orgType === 'institute' ? 'Institute Code' : 'School Code / Access Code'}
+                                                        type="text"
+                                                        value={uniqueId}
+                                                        onChange={handleUniqueIdChange}
+                                                        placeholder={orgType === 'institute' ? 'Enter Institute Code' : 'Enter School Code'}
+                                                        required
+                                                        error={error === 'Invalid Code' ? error : ''}
+                                                    />
+                                                    <Input
+                                                        id="instituteName"
+                                                        label={orgType === 'institute' ? 'Institute Name' : 'School Name'}
+                                                        type="text"
+                                                        value={instituteName}
+                                                        onChange={handleInstituteNameChange}
+                                                        placeholder={orgType === 'institute' ? 'Enter Institute Name' : 'Enter School Name'}
+                                                        required
+                                                        error={error.includes('Mismatch') ? error : ''}
+                                                    />
+                                                </>
+                                            )}
+                                        </>
                                     )}
 
                                     <div className="mt-6 space-y-3">
@@ -943,16 +1067,30 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                                     </div>
                                 )}
 
-                                {!isLogin && (
+                                {!isLogin && activeRole === UserRole.Management && orgType && (
                                     <Input
-                                        id="name"
-                                        label="Full Name"
-                                        value={name}
-                                        onChange={(e) => setName(e.target.value)}
-                                        placeholder="John Doe"
+                                        id="instituteName"
+                                        label={orgType === 'institute' ? "Institute Name" : "School Name"}
+                                        value={instituteName}
+                                        onChange={(e) => setInstituteName(e.target.value)}
+                                        placeholder={orgType === 'institute' ? "Enter Institute Name" : "Enter School Name"}
                                         required
                                         className="text-black"
                                     />
+                                )}
+
+                                {!isLogin && (
+                                    (activeRole === UserRole.Librarian || orgType) && (
+                                        <Input
+                                            id="name"
+                                            label="Full Name"
+                                            value={name}
+                                            onChange={(e) => setName(e.target.value)}
+                                            placeholder="John Doe"
+                                            required
+                                            className="text-black"
+                                        />
+                                    )
                                 )}
 
                                 {/* Unique ID (All except Librarian) */}
@@ -1204,7 +1342,7 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
 
                                 <Button
                                     type="submit"
-                                    className="w-full py-3 text-lg font-semibold shadow-md transition-transform active:scale-[0.98]"
+                                    className="w-full py-3 text-lg font-semibold shadow-md transition-transform active:scale-[0.98] bg-blue-600 hover:bg-blue-700 text-white border-transparent"
                                     disabled={loading}
                                 >
                                     {loading ? (

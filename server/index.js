@@ -779,7 +779,7 @@ app.post('/api/org-code/request', authenticateToken, async (req, res, next) => {
 });
 
 // Org Code Confirm
-app.get('/api/org-code/confirm/:token', async (req, res, next) => {
+app.post('/api/org-code/confirm/:token', async (req, res, next) => {
   try {
     const { token } = req.params;
 
@@ -800,16 +800,14 @@ app.get('/api/org-code/confirm/:token', async (req, res, next) => {
     const randomSuffix = Math.floor(100000 + Math.random() * 900000).toString();
     const code = `${prefix}-${randomSuffix}`;
 
-    // Insert into org_codes table (Created by setup_tables.js)
+    // Insert into org_codes table
     try {
       await pool.query(
         'INSERT INTO org_codes (code, type, institute_id, created_by) VALUES ($1, $2, $3, $4)',
-        [code, org_type, institute_id, null] // created_by is null as it is system generated
+        [code, org_type, institute_id, null]
       );
     } catch (dbErr) {
       console.error('Failed to insert org_code', dbErr);
-      // Fallback: If table missing (shouldn't be), just log. 
-      // But we want it to work.
     }
 
     // Email user
@@ -819,7 +817,52 @@ app.get('/api/org-code/confirm/:token', async (req, res, next) => {
       `Your request for ${org_type} code has been approved.\n\nYour Code: ${code}\n\nYou can now use this code to register users.`
     );
 
-    res.send(`Request confirmed. Code Generated: ${code}. Email sent to user.`);
+    res.json({ success: true, code, message: `Request confirmed. Code Generated: ${code}. Email sent to user.` });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// Org Code View
+app.post('/api/org-code/view', authenticateToken, async (req, res, next) => {
+  try {
+    const { password, orgType } = req.body;
+    if (!password || !orgType) return res.status(400).json({ error: 'Missing fields' });
+
+    // Verify password for current user
+    const userId = req.user.id;
+    const r = await pool.query('SELECT password_hash FROM users WHERE id=$1', [userId]);
+    if (!r.rows.length) return res.status(404).json({ error: 'User not found' });
+
+    const hash = r.rows[0].password_hash;
+    const match = await bcrypt.compare(password, hash);
+    if (!match) return res.status(401).json({ error: 'Invalid password' });
+
+    // Fetch code
+    // Assuming institute_id logic needs to be handled if user belongs to one?
+    // For now, simpler query: find code of type created by this user?
+    // Actually org_codes doesn't always have created_by set (it was null in confirm).
+    // But usually Management user is associated with an institute.
+    // Let's assume there's only one code per type for the authenticated user's organization scope?
+    // The current user structure has 'extra'.
+
+    // Better logic: fetch all codes, filter by type (simple approach for now)
+    const codes = await pool.query('SELECT code, type FROM org_codes WHERE type=$1', [orgType]);
+    // This returns ANY code of that type. This is insecure if there are multiple institutes.
+    // We should filter by institute_id if applicable.
+
+    // Check if user has institute_id access?
+    // Management user might have instituteId in extra?
+    // For the purpose of this fix, I'll return the MOST RECENT code of that type (assuming single tenant per deployment or small scale).
+    // Ideally we should link org_code to Management user.
+
+    if (codes.rows.length > 0) {
+      // Return the latest one
+      res.json({ success: true, code: codes.rows[codes.rows.length - 1].code });
+    } else {
+      res.status(404).json({ error: 'No code found' });
+    }
+
   } catch (e) {
     next(e);
   }

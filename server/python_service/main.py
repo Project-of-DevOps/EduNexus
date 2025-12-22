@@ -31,6 +31,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc):
+    print(f"Validation Error: {exc}")
+    return JSONResponse(
+        status_code=422,
+        content={"detail": str(exc), "body": str(exc.body)},
+    )
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    print(f"Global Error: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Internal Server Error: {str(exc)}"},
+    )
+
 class SignupRequest(BaseModel):
     name: str = "Unknown"
     email: str
@@ -41,6 +60,8 @@ class SignupRequest(BaseModel):
 class SigninRequest(BaseModel):
     email: str
     password: str
+    role: Optional[str] = None
+    extra: Dict[str, Any] = {}
 
 class StateRequest(BaseModel):
     user_id: str
@@ -101,8 +122,22 @@ def python_signup(req: SignupRequest):
     supabase = get_supabase_admin()
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase not configured")
+
+    # 1. Strict Duplicate Check (Use public table as source of truth)
+    try:
+        # Check simple duplicate
+        existing_res = supabase.table("users").select("id").eq("email", req.email).execute()
+        if existing_res.data and len(existing_res.data) > 0:
+            # Strict rejection as requested
+            raise HTTPException(status_code=400, detail="Email-ID already been used")
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error checking duplicate: {e}")
+        # Fail safe
+        raise HTTPException(status_code=500, detail="Internal Server Error during validation")
     
-    # 1. ORG CODE VALIDATION FOR NON-MANAGEMENT
+    # 2. ORG CODE VALIDATION FOR NON-MANAGEMENT
     org_info = None
     if req.role in ["Student", "Parent", "Teacher"]:
         # Code is expected in 'extra'
@@ -118,21 +153,56 @@ def python_signup(req: SignupRequest):
             org_info = validate_org_code(code)
             if not org_info:
                 # If code provided but invalid (checks org_codes table)
-                # But wait, locally invited teachers might use a different code system?
-                # The 'pendingTeachers' in frontend are local. 
-                # If the user is using an Institute Code (from DB), it must be valid.
                 raise HTTPException(status_code=400, detail="Invalid Organization Code")
 
+            # STRICT TYPE CHECK: ensure user selected correct tab/type for this code
+            req_type = req.extra.get("orgType") or req.extra.get("type")
+            if req_type:
+                 req_type_norm = req_type.lower()
+                 info_type_norm = org_info.get("type", "").lower()
+                 if req_type_norm != info_type_norm:
+                      # Mismatch: User used School tab for Institute code or vice versa
+                      raise HTTPException(status_code=400, detail="Invalid Details")
+
     # 0. CHECK IF USER ALREADY EXISTS IN PUBLIC TABLE
-    # If they do, we shouldn't try create them again in Auth or Public table.
     try:
-        existing_user = supabase.table("users").select("id").eq("email", req.email).execute()
-        if existing_user.data and len(existing_user.data) > 0:
-             raise HTTPException(status_code=400, detail="Account already exists. Please log in.")
+        # Fetch role and extra to check consistency
+        existing_res = supabase.table("users").select("*").eq("email", req.email).execute()
+        if existing_res.data and len(existing_res.data) > 0:
+             existing_user = existing_res.data[0]
+             
+             # Check for "Context Switch" Exception for Management Roles
+             ALLOWED_TITLES = ["Chairman", "Director", "Principal", "Vice Principal", "Manager", "Administrator"]
+             
+             req_title = req.extra.get("title")
+             is_management = req.role == "Management"
+             title_ok = req_title in ALLOWED_TITLES
+             
+             existing_role = existing_user.get("role")
+             existing_extra = existing_user.get("extra") or {}
+             existing_type = existing_extra.get("type") or existing_extra.get("org_type")
+             
+             req_type = req.extra.get("type")
+             if org_info:
+                 req_type = org_info.get("type")
+             
+             # Allow Merge/Update if Management switching context
+             if is_management and title_ok and existing_role == "Management" and existing_type and req_type and existing_type != req_type:
+                 print(f"Allowing Context Switch for {req.email}: {existing_type} -> {req_type}")
+                 new_extra = {**existing_extra, **req.extra}
+                 if req_type:
+                     new_extra["type"] = req_type
+                     new_extra["org_type"] = req_type
+                 
+                 supabase.table("users").update({"extra": new_extra}).eq("id", existing_user['id']).execute()
+                 existing_user["extra"] = new_extra
+                 return {"success": True, "user": existing_user}
+             
+             raise HTTPException(status_code=400, detail="Email-ID is already existing")
+
     except HTTPException:
         raise
     except Exception as e:
-        # If table doesn't exist or connection fails, we might want to fail hard or log
         print(f"Error checking existing user: {e}")
 
     try:
@@ -165,7 +235,7 @@ def python_signup(req: SignupRequest):
                     # If we fallback to sign_up, it sends email.
                     # Best action: Fail and tell user to contact support or try password reset?
                     # Or for now, treat as failure.
-                    raise HTTPException(status_code=400, detail="User already registered in Auth system. Please contact support.")
+                    raise HTTPException(status_code=400, detail="Email-ID is already existing")
                 
                 # Only fallback if it's NOT an "already registered" error (e.g. unknown error)
                 # Fallback: attempt standard sign_up (may send confirmation email)
@@ -219,7 +289,8 @@ def python_signup(req: SignupRequest):
                     "department": req.extra.get("department"),
                     "institute_id": org_info["institute_id"] if org_info else (req.extra.get("instituteName") or req.extra.get("instituteId")),
                     "class_id": req.extra.get("classId"),
-                    "is_verified": False
+                    "is_verified": False,
+                    "status": "pending"
                 }
                 supabase.table("teachers").insert(t_data).execute()
 
@@ -230,7 +301,8 @@ def python_signup(req: SignupRequest):
                     "class_id": req.extra.get("classId"),
                     "institute_id": org_info["institute_id"] if org_info else req.extra.get("instituteId"),
                     "parent_id": req.extra.get("parentId"),
-                    "is_verified": False
+                    "is_verified": False,
+                    "status": "pending"
                 }
                 supabase.table("students").insert(s_data).execute()
 
@@ -250,46 +322,182 @@ def python_signup(req: SignupRequest):
 
     except Exception as e:
         print(f"Signup Error: {e}")
+        msg = str(e).lower()
+        if "duplicate" in msg or "unique" in msg:
+             raise HTTPException(status_code=400, detail="Email-ID is already existing")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+        
 @app.post("/api/py/signin")
-def python_signin(req: SigninRequest):
-    if not url or not key:
-         raise HTTPException(status_code=500, detail="Supabase not configured")
+async def python_signin(req: SigninRequest):
+    supabase = get_supabase_admin()
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Supabase not configured")
+
+    auth_client = create_client(os.environ.get("SUPABASE_URL"), os.environ.get("SUPABASE_SERVICE_ROLE_KEY"))
 
     try:
-        # Client A: Attempt Login
-        auth_client = create_client(url, key)
+        # 1. Authenticate with Supabase Auth
         try:
-             auth_res = auth_client.auth.sign_in_with_password({"email": req.email, "password": req.password})
+            auth_res = auth_client.auth.sign_in_with_password({"email": req.email, "password": req.password})
         except Exception as e:
-             raise HTTPException(status_code=401, detail="Invalid credentials")
-        
+             if "Invalid login credentials" in str(e):
+                 raise HTTPException(status_code=401, detail="Invalid credentials")
+             raise HTTPException(status_code=400, detail=str(e))
+
         if not auth_res.user:
              raise HTTPException(status_code=401, detail="Login failed")
 
         user_id = auth_res.user.id
         session_token = auth_res.session.access_token
 
-        # Client B: Admin Fetch
-        admin_client = create_client(url, key)
+        # 2. Strict Validation against Public DB
+        res = supabase.table("users").select("*").eq("id", user_id).execute()
+        if not res.data:
+            raise HTTPException(status_code=404, detail="User profile not found")
         
-        # Fetch public profile
-        res = admin_client.table("users").select("*").eq("id", user_id).execute()
-        user_profile = res.data[0] if res.data else {}
+        db_user = res.data[0]
+        db_role = db_user.get("role")
+        db_extra = db_user.get("extra") or {}
+        db_org_type = db_extra.get("org_type") or db_extra.get("type")
 
-        # Fetch dashboard state
-        state_res = admin_client.table("user_dashboard_states").select("state_data").eq("user_id", user_id).execute()
-        dashboard_state = state_res.data[0]['state_data'] if state_res.data else {}
+        # A. Role Check (if role provided)
+        # Note: req.role might be "Management" but user is "Manager" (simplified role check needed?)
+        # For now, strict check if provided.
+        if req.role and req.role != db_role:
+             raise HTTPException(status_code=400, detail=f"Login denied. Role mismatch: Account is registered as {db_role}.")
+
+        # B. Org Type Check (Strict)
+        # Verify if user registered as School trying to login as Institute
+        desired_org_type = req.extra.get("orgType") if req.extra else None
+        
+        # Normalize comparison
+        if db_org_type and desired_org_type:
+            db_norm = db_org_type.lower()
+            req_norm = desired_org_type.lower()
+            
+            if db_norm != req_norm:
+                if db_norm == "school" and req_norm == "institute":
+                    raise HTTPException(status_code=400, detail="Wrong Input")
+                if db_norm == "institute" and req_norm == "school":
+                    raise HTTPException(status_code=400, detail="Wrong Input")
+                # Generic fallback
+                raise HTTPException(status_code=400, detail="Wrong Input")
+
+        # C. Institute Code & Name Check (Strict for Teacher/Student/Parent if provided)
+        # Frontend will pass uniqueId (Code) and instituteName/orgName in extra
+        
+        # 1. Check Code Existence
+        req_code = req.extra.get("uniqueId") or req.extra.get("code")
+        req_org_name = req.extra.get("instituteName") or req.extra.get("orgName") or req.extra.get("schoolName")
+
+        if req.role == "Teacher" or req.role == "Student" or req.role == "Parent":
+            # If code is provided (it should be mandatory for these roles now per requirement)
+            if req_code:
+                # Validate Code
+                org_info = validate_org_code(req_code)
+                if not org_info:
+                    raise HTTPException(status_code=400, detail="Invalid Code")
+                
+                # STRICT VALIDATION: Check Login Type Mismatch (School vs Institute)
+                # Ensure user logged in with correct Type toggle matching the code
+                req_login_type = req.extra.get("orgType")
+                if req_login_type:
+                     db_org_type = org_info.get("type", "").lower()
+                     print(f"DEBUG: Login Type Check - Req: '{req_login_type}', DB: '{db_org_type}', Code: '{req_code}'")
+                     if req_login_type.lower().strip() != db_org_type:
+                         raise HTTPException(status_code=400, detail=f"Invalid Login Type: You selected {req_login_type} but code is for {db_org_type}")
+                
+                # Validate Name Matches Code
+                # org_info structure: {id, code, type, institute_id, ...}
+                # We need to check if 'institute_id' matches 'req_org_name' 
+                # OR we might need to fetch the Organization Name from 'organizations' table using 'org_info.institute_id'
+                # But 'organizations' table might not exist fully populated yet?
+                # Let's check if 'organizations' table exists or if we rely on 'org_codes' having metadata?
+                # The 'org_codes' table has 'institute_id'.
+                
+                # Assumption: 'institute_id' in org_codes IS the Name or ID?
+                # Looking at create_org_code: "institute_id": req.institute_id
+                # Usually this is the ID.
+                # However, user requirement says "Institute name if logging from institute login or School Name... display School Name Mismatch"
+                
+                # Let's try to match against the 'institute_id' stored in 'org_codes'.
+                # Ideally, we should fetch the REAL name from 'organizations' table.
+                # Let's try to fetch organization details if possible.
+                
+                # Fallback: if 'institute_id' in org_codes allows storing Name directly (legacy check)?
+                # Or we check if req_org_name matches.
+                
+                 # Strict Check: proper Name Mismatch
+                db_org_id = org_info.get("institute_id")
+                db_org_type = org_info.get("type", "").lower()
+                
+                match = False
+                if db_org_id:
+                     # Simple string match (case insensitive)
+                     if db_org_id.lower().strip() == req_org_name.lower().strip():
+                         match = True
+                     else:
+                         # Fetch organization name from correct table
+                         try:
+                             table_name = "institutes" if db_org_type == "institute" else "schools"
+                             org_res = supabase.table(table_name).select("name").eq("id", db_org_id).execute()
+                             if org_res.data:
+                                 real_name = org_res.data[0]['name']
+                                 if real_name.lower().strip() == req_org_name.lower().strip():
+                                     match = True
+                         except Exception as db_err:
+                             print(f"Name verification DB error: {db_err}")
+                             pass
+                
+                # If we still haven't matched, and we enforced Name validation:
+                if not match:
+                    # Determine Error Message
+                    err_msg = "School Name Mismatch"
+                    if db_org_type == "institute":
+                        err_msg = "Institute Name Mismatch"
+                    
+                    raise HTTPException(status_code=400, detail=err_msg)
+
+        # D. Status Check (Strict for Teachers)
+        if req.role == "Teacher":
+             # We need to check the 'teachers' table for the status.
+             # db_user has 'id'.
+             t_res = supabase.table("teachers").select("status").eq("user_id", user_id).execute()
+             if t_res.data:
+                 t_status = t_res.data[0].get("status") or "pending"
+                 if t_status == "pending":
+                     # Return 403 with specific detail handled by frontend
+                     raise HTTPException(status_code=403, detail="Waiting for Management Approval")
+                 elif t_status == "rejected":
+                     raise HTTPException(status_code=403, detail="Request was Rejected")
+        
+        # 3. Fetch Dashboard State (from user_dashboard_states)
+        # 3. Fetch Dashboard State
+        dashboard_state = {}
+        dashboard_error = False
+        try:
+            settings_res = supabase.table("user_dashboard_states").select("state_data").eq("user_id", user_id).execute()
+            if settings_res.data:
+                dashboard_state = settings_res.data[0]['state_data']
+        except Exception as e:
+            print(f"Dashboard State Fetch Error: {e}")
+            dashboard_error = True
 
         return {
             "success": True, 
             "token": session_token, 
-            "user": user_profile, 
-            "dashboard_state": dashboard_state
+            "user": db_user, 
+            "dashboard_state": dashboard_state,
+            "dashboard_error": dashboard_error
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"Signin Error: {e}")
+        # Return specific error for debugging
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 @app.post("/api/py/check-email")
 def check_email(req: Dict[str, str]):
@@ -304,6 +512,28 @@ def check_email(req: Dict[str, str]):
         exists = len(res.data) > 0
         return {"exists": exists}
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/py/restore-dashboard-state")
+def restore_dashboard_state(req: Dict[str, str]):
+    user_id = req.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID required")
+    
+    supabase = get_supabase_admin()
+    if not supabase:
+         raise HTTPException(status_code=500, detail="Supabase not configured")
+
+    try:
+        # Simulate check first
+        res = supabase.table("user_dashboard_states").select("state_data").eq("user_id", user_id).execute()
+        if res.data:
+            return {"success": True, "dashboard_state": res.data[0]['state_data']}
+        else:
+            # Return empty but success
+            return {"success": True, "dashboard_state": {}}
+    except Exception as e:
+        print(f"Restore State Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/py/create-org-code")
@@ -332,11 +562,68 @@ def create_org_code(req: OrgCodeRequest, authorization: str = Header(None)):
 def update_state(req: StateRequest):
     supabase = get_supabase_admin()
     try:
-        data = {"user_id": req.user_id, "state_data": req.state, "last_updated_at": "now()"}
+        # Upsert into user_dashboard_states
+        # We use user_id as key.
+        data = {
+            "user_id": req.user_id, 
+            "state_data": req.state, 
+            "updated_at": "now()"
+        }
+        # checking if user exists in settings is not strictly needed if we assume user exists, 
+        # but upsert handling matches primary key.
         supabase.table("user_dashboard_states").upsert(data).execute()
         return {"success": True}
     except Exception as e:
+        print(f"Update State Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/py/management/pending-teachers")
+def get_pending_teachers(institute_id: Optional[str] = None):
+    # Fetch teachers with status="pending"
+    # Ideally scoped by institute_id
+    supabase = get_supabase_admin()
+    if not supabase:
+         raise HTTPException(status_code=500, detail="Supabase not configured")
+
+    # Join with users table to get name, email, extra
+    try:
+        # Debug: Trying simple select first to isolate join issue
+        # query = supabase.table("teachers").select("*, users!inner(name, email, extra)").eq("status", "pending")
+        # Removing !inner to see if it works as left join
+        query = supabase.table("teachers").select("*, users(name, email, extra)").eq("status", "pending")
+    
+        if institute_id:
+            query = query.eq("institute_id", institute_id)
+        
+        res = query.execute()
+        return res.data
+    except Exception as e:
+        print(f"Error fetching pending teachers: {e}")
+        # Return error as detail to see it in curl
+        raise HTTPException(status_code=500, detail=f"Failed to fetch teachers: {str(e)}")
+
+@app.post("/api/py/management/approve-teacher")
+def approve_teacher(req: Dict[str, str]):
+    user_id = req.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID required")
+        
+    supabase = get_supabase_admin()
+    # Update status to approved and is_verified to true
+    supabase.table("teachers").update({"status": "approved", "is_verified": True}).eq("user_id", user_id).execute()
+    return {"success": True}
+
+@app.post("/api/py/management/reject-teacher")
+def reject_teacher(req: Dict[str, str]):
+    user_id = req.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID required")
+        
+    supabase = get_supabase_admin()
+    # Update status to rejected
+    supabase.table("teachers").update({"status": "rejected", "is_verified": False}).eq("user_id", user_id).execute()
+    return {"success": True}
 
 if __name__ == "__main__":
     import uvicorn

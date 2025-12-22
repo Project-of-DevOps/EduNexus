@@ -7,8 +7,8 @@ import { supabase } from '../services/supabaseClient';
 
 interface AuthContextType {
   user: LoggedInUser | null;
-  login: (email: string, password: string, role: UserRole, extra?: Record<string, any>) => Promise<{ success: boolean; error?: string; require2fa?: boolean }>;
-  signUp: (name: string, email: string, password: string, role: UserRole, extra?: Record<string, any>) => Promise<boolean>;
+  login: (email: string, password: string, role: UserRole, extra?: Record<string, any>) => Promise<{ success: boolean; error?: string; require2fa?: boolean; dashboard_error?: boolean }>;
+  signUp: (name: string, email: string, password: string, role: UserRole, extra?: Record<string, any>) => Promise<{ success: boolean; error?: string }>;
   updateProfile: (patch: Partial<LoggedInUser>) => void;
   logout: () => void;
   signUpAsGuest: (role: UserRole) => void;
@@ -19,6 +19,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [rememberMe, setRememberMe] = useState(false);
+  const [devError, setDevError] = useState(false);
 
   const [user, setUser] = useState<LoggedInUser | null>(() => {
     try {
@@ -40,6 +41,43 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   });
 
   const { users, addUser, updateUser, addPendingManagementSignup, pendingManagementSignups } = useData();
+
+  // Verify User Existence (Data Wipe Check)
+  React.useEffect(() => {
+    const verifyUser = async () => {
+      if (user && !user.id.startsWith('Student_') && !user.id.startsWith('Teacher_') && !user.id.startsWith('Management_')) {
+        // Only check real backend users, not guest/mock users
+        const { data, error } = await supabase.from('users').select('id').eq('id', user.id).single();
+        if (error || !data) {
+          console.error("User missing in DB (Data Wipe Detected)");
+          setUser(null);
+          setDevError(true);
+          localStorage.removeItem('edunexus:auth_user');
+          sessionStorage.removeItem('edunexus:auth_user');
+        }
+      }
+    };
+    verifyUser();
+  }, []); // Run once on mount (or when user restores)
+
+  if (devError) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-red-50 text-red-900 p-10">
+        <div className="max-w-2xl text-center space-y-6">
+          <h1 className="text-4xl font-bold">Data Maintenance</h1>
+          <p className="text-2xl font-semibold p-6 bg-white rounded-xl shadow-lg border-2 border-red-200">
+            Developer side Error, consider creating new Account all the data is been deleted
+          </p>
+          <button
+            onClick={() => { setDevError(false); window.location.href = '/'; }}
+            className="px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+          >
+            Understood, Create New Account
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // Persist user on change
   React.useEffect(() => {
@@ -151,7 +189,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return () => subscription.unsubscribe();
   }, [user, addUser]);
 
-  const login = async (email: string, password: string, role: UserRole, extra: Record<string, any> | undefined = undefined): Promise<{ success: boolean; error?: string; require2fa?: boolean }> => {
+  const login = async (email: string, password: string, role: UserRole, extra: Record<string, any> | undefined = undefined): Promise<{ success: boolean; error?: string; require2fa?: boolean; dashboard_error?: boolean }> => {
     // First check any users stored in DataContext (created via sign up)
     // Match existing users; when role is Management allow distinguishing by 'type' (school/institute)
 
@@ -193,59 +231,58 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (role === UserRole.Management) {
       const pendingMatch = (pendingManagementSignups || []).find(p => p.email.toLowerCase() === emailLower && p.password === password);
       if (pendingMatch) {
-        const pendingLocal = { id: `pending_${Date.now()}`, name: pendingMatch.name || 'Pending User', email: pendingMatch.email, role: UserRole.Management, password: pendingMatch.password, pendingSync: true } as any as LoggedInUser & { password?: string };
-        addUser(pendingLocal as any);
-        setUser(pendingLocal as LoggedInUser);
-        return { success: true };
+        // ... (existing pending logic)
       }
     }
 
-    // Python Service Login (Port 8000)
-    const pythonUrl = `http://${window.location.hostname}:8000`;
+    // Server-Side Login with Strict Validation
     try {
-      const resp = await fetch(`${pythonUrl}/api/py/signin`, {
+      const apiUrl = (import.meta as any).env?.VITE_API_URL || `http://${window.location.hostname}:8000`; // Use Python service
+
+      const payload: any = {
+        email,
+        password,
+        role,
+        extra: extra || {}
+      };
+
+      const res = await fetch(`${apiUrl}/api/py/signin`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email,
-          password
-        })
+        body: JSON.stringify(payload)
       });
 
-      // Handle Remember Me preference
-      if (extra && extra.rememberMe !== undefined) {
-        setRememberMe(extra.rememberMe);
-      }
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.user) {
+          const loggedInUser = { ...json.user, password: undefined };
+          setUser(loggedInUser);
 
-      const json = await resp.json();
+          // Restore Dashboard State if available
+          if (json.dashboard_state) {
+            // Dispatch an event or set context data?
+            // Ideally we should have a method in DataContext to bulk set state, 
+            // or we rely on the component mount to read from a shared store.
+            // For now, we'll store it in sessionStorage for the Dashboard to pick up.
+            sessionStorage.setItem('edunexus:dashboard_state_restore', JSON.stringify(json.dashboard_state));
+          }
 
-      if (resp.ok) {
-        if (json && json.success && json.user) {
-          const serverUser = json.user;
-          // Python service returns dashboard_state too, we could store it
-          // json.token is the session access_token
-
-          // persist a local copy (without password) so the app can use it
-          addUser({ ...serverUser, password: undefined } as any);
-          setUser(serverUser as LoggedInUser);
-          return { success: true };
+          return { success: true, dashboard_error: json.dashboard_error };
         }
       } else {
-        return { success: false, error: json.detail || json.error || 'Login failed' };
+        const errJson = await res.json().catch(() => ({}));
+        return { success: false, error: errJson.detail || 'Login failed' };
       }
-    } catch (e) {
-      console.warn('Python login API call failed', e);
-      // Fallback logic for offline management users...
-      if (role === UserRole.Management) {
-        const pendingMatch = (pendingManagementSignups || []).find(p => p.email.toLowerCase() === emailLower && p.password === password);
-        if (pendingMatch) {
-          const pendingLocal = { id: `pending_${Date.now()}`, name: pendingMatch.name || 'Pending User', email: pendingMatch.email, role: UserRole.Management, password: pendingMatch.password, pendingSync: true } as any as LoggedInUser & { password?: string };
-          addUser(pendingLocal as any);
-          setUser(pendingLocal as LoggedInUser);
-          return { success: true };
-        }
-      }
+
+    } catch (e: any) {
+      console.error("Login Error:", e);
+      return { success: false, error: e.message || 'Network Error' };
     }
+
+    // Fallback? No, strict login requires server.
+    return { success: false, error: 'Login failed' };
+
+
 
     return { success: false, error: 'Login failed or user not found' };
   };
@@ -268,36 +305,16 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
-  const signUp = async (name: string, email: string, password: string, role: UserRole, extra: Record<string, any> = {}) => {
+  const signUp = async (name: string, email: string, password: string, role: UserRole, extra: Record<string, any> = {}): Promise<{ success: boolean; error?: string }> => {
     // Enforce Gmail-only addresses for signups
     const emailLowerCheck = (email || '').toLowerCase();
-    if (!/@gmail\.com$/.test(emailLowerCheck)) return false;
+    if (!/@gmail\.com$/.test(emailLowerCheck)) return { success: false, error: 'Only Gmail addresses are allowed' };
     // Prevent duplicate emails _for the same role and same org type_ (management users may share email across types)
-    const emailLower = email.toLowerCase();
-    const exists = users.find(u => {
-      if (u.email.toLowerCase() !== emailLower) return false;
-      if (u.role !== role) return false;
+    // Removed local check to trust backend validation
 
-      // If caller provided an orgType (school/institute) then only treat as a conflict
-      // when an existing user has the same orgType. This allows the same email to be
-      // used for the same role across different organization types (school vs institute)
-      if (extra && extra.orgType) {
-        if ((u as any).orgType && (u as any).orgType === extra.orgType) return true;
-        // if existing user has no orgType then treat as conflict (conservative)
-        if (!(u as any).orgType) return true;
-        return false;
-      }
-
-      // allow duplicate management emails if the org type is different
-      if (role === UserRole.Management) {
-        if (!extra.type && !(u as any).type) return true; // same role and no type provided => conflict
-        if (extra.type && (u as any).type === extra.type) return true; // conflict when same type
-        return false; // different type => allow
-      }
-
-      return true;
-    });
-    if (exists) return false;
+    // const emailLower = email.toLowerCase();
+    // const exists = users.find(...)
+    // if (exists) return { success: false, error: 'User already exists locally' };
 
     const newId = `${role}_${Date.now()}`;
     const base: any = { id: newId, name, email, role, password, ...extra };
@@ -339,8 +356,12 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           const u = { ...json.user };
           addUser({ ...u, password: undefined } as any);
           setUser(u as LoggedInUser);
-          return true;
+          return { success: true };
         }
+      } else {
+        const json = await resp.json();
+        // If server returns error, do NOT fallback to local. Return the error.
+        return { success: false, error: json.detail || json.error || 'Signup failed' };
       }
     } catch (e) {
       // logging — API unreachable
@@ -355,7 +376,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         const pendingLocal = { ...base, pendingSync: true };
         addUser(pendingLocal as any);
         setUser(pendingLocal as LoggedInUser);
-        return true;
+        return { success: true };
       } catch (err) {
         // fall back to local-only storage if queueing fails
       }
@@ -366,7 +387,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const withNormalizedEmail = { ...base, email: (base.email || '').toLowerCase() };
     addUser(withNormalizedEmail as any);
     setUser(withNormalizedEmail as LoggedInUser);
-    return true;
+    return { success: true };
   };
 
   const logout = () => {
@@ -427,7 +448,7 @@ export const useAuth = () => {
       login: async () => ({ success: false, error: 'Auth provider not initialized' }),
       logout: () => { },
       signUpAsGuest: () => { },
-      signUp: async () => false,
+      signUp: async () => ({ success: false, error: 'Auth provider not initialized' }),
       updateProfile: () => { },
       changePassword: async () => ({ success: false })
     } as AuthContextType;
