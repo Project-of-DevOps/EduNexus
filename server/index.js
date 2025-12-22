@@ -1408,6 +1408,23 @@ app.post('/api/queue-signups/:id/retry', async (req, res, next) => {
     // insert into users using provided password_hash
     const insert = await pool.query('INSERT INTO users (name,email,password_hash,role,extra) VALUES ($1,$2,$3,$4,$5) RETURNING id,name,email,role,created_at', [item.name || null, item.email, item.password_hash, 'Management', item.extra || {}]);
 
+    // Org Code Analytics (Missing Endpoint Fix)
+    app.get('/api/org-code/analytics', authenticateToken, async (req, res) => {
+      try {
+        const { rows: stats } = await pool.query(`
+            SELECT 
+                COUNT(*) FILTER (WHERE status = 'pending') as pending_requests,
+                COUNT(*) FILTER (WHERE status = 'confirmed') as approved_requests,
+                COUNT(*) as total_requests
+            FROM org_code_requests
+        `);
+        res.json(stats[0]);
+      } catch (e) {
+        logger.error('Failed to fetch org code analytics', e);
+        res.json({ pending_requests: 0, approved_requests: 0, total_requests: 0 }); // Fallback
+      }
+    });
+
     // mark queue item as synced
     await pool.query('UPDATE signup_queue SET status=$1, attempts=$2, note=$3 WHERE id=$4', ['synced', item.attempts + 1, 'synced by admin retry', id]);
 
