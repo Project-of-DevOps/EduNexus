@@ -1469,9 +1469,15 @@ app.post('/api/py/signin', async (req, res) => {
 
     const user = users[0];
 
+    // DEBUG LOGGING
+    console.log(`[Signin Debug] Email: ${email}, FoundUser: ${user.email}, Role: ${user.role}, HashPrefix: ${user.password_hash ? user.password_hash.substring(0, 7) : 'NONE'}`);
+
     // 2. Validate Password
     const match = await bcrypt.compare(password, user.password_hash);
-    if (!match) return res.status(400).json({ detail: "Wrong password" });
+    if (!match) {
+      console.log(`[Signin Debug] Password mismatch for ${email}. Supplied password length: ${password.length}`);
+      return res.status(400).json({ detail: "Wrong password" });
+    }
 
     // 3. User Role Mismatch Check
     if (user.role !== role) {
