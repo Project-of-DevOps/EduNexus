@@ -60,12 +60,23 @@ const app = express();
 app.use(helmet());
 
 // CORS Configuration
-// Dynamic CORS Configuration
+// Allow list built from static values plus optional env-configured client URL
+const allowedOrigins = [
+  'http://localhost:5173',
+  'https://edunexus-frontend-v2.onrender.com'
+];
+if (process.env.VITE_API_URL) {
+  try {
+    const clientUrl = new URL(process.env.VITE_API_URL);
+    allowedOrigins.push(clientUrl.origin);
+  } catch (e) { /* ignore invalid URL */ }
+}
 app.use(cors({
-  origin: [
-    "http://localhost:5173",
-    "https://edunexus-frontend-v2.onrender.com"
-  ],
+  origin: function(origin, callback) {
+    // Allow requests with no origin (curl, mobile) or from whitelisted origins
+    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+    callback(new Error('Not allowed by CORS'));
+  },
   credentials: true
 }));
 
@@ -1114,8 +1125,11 @@ app.post('/api/auth/google-login', async (req, res, next) => {
       const token = generateAccessToken(user);
       const refreshToken = generateRefreshToken(user);
 
-      res.cookie('accessToken', token, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', maxAge: 15 * 60 * 1000 });
-      res.cookie('refreshToken', refreshToken, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', maxAge: 7 * 24 * 60 * 60 * 1000 });
+      const cookieSameSite = process.env.NODE_ENV === 'production' ? 'none' : 'lax';
+      const cookieSecure = process.env.NODE_ENV === 'production';
+
+      res.cookie('accessToken', token, { httpOnly: true, secure: cookieSecure, sameSite: cookieSameSite, maxAge: 15 * 60 * 1000 });
+      res.cookie('refreshToken', refreshToken, { httpOnly: true, secure: cookieSecure, sameSite: cookieSameSite, maxAge: 7 * 24 * 60 * 60 * 1000 });
 
       const userSafe = { ...user };
       delete userSafe.password_hash;
@@ -1473,7 +1487,27 @@ app.post('/api/py/signin', async (req, res) => {
     console.log(`[Signin Debug] Email: ${email}, FoundUser: ${user.email}, Role: ${user.role}, HashPrefix: ${user.password_hash ? user.password_hash.substring(0, 7) : 'NONE'}`);
 
     // 2. Validate Password
-    const match = await bcrypt.compare(password, user.password_hash);
+    const hash = user.password_hash;
+    let match = false;
+    try {
+      if (hash && hash !== 'supabase_auth') {
+        // Local bcrypt-stored password
+        match = await bcrypt.compare(password, hash);
+      } else {
+        // Fallback: user was created via Supabase auth — verify with Supabase
+        try {
+          const { data: signInData, error: signInErr } = await supabase.auth.signInWithPassword({ email, password });
+          if (!signInErr && signInData && signInData.user) {
+            match = true;
+          }
+        } catch (sbErr) {
+          logger.warn('Supabase sign-in fallback failed', sbErr?.message || sbErr);
+        }
+      }
+    } catch (err) {
+      logger.warn('Password compare error', err?.message || err);
+    }
+
     if (!match) {
       console.log(`[Signin Debug] Password mismatch for ${email}. Supplied password length: ${password.length}`);
       return res.status(400).json({ detail: "Wrong password" });
@@ -1817,17 +1851,19 @@ app.post('/api/login', async (req, res, next) => {
     const refreshToken = generateRefreshToken(u);
 
     // Set Cookies
+    const cookieSameSite = process.env.NODE_ENV === 'production' ? 'none' : 'lax';
+    const cookieSecure = process.env.NODE_ENV === 'production';
     res.cookie('accessToken', accessToken, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
+      secure: cookieSecure,
+      sameSite: cookieSameSite,
       maxAge: 15 * 60 * 1000 // 15m
     });
 
     res.cookie('refreshToken', refreshToken, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
+      secure: cookieSecure,
+      sameSite: cookieSameSite,
       maxAge: 7 * 24 * 60 * 60 * 1000 // 7d
     });
 
@@ -1848,10 +1884,12 @@ app.post('/api/refresh-token', (req, res) => {
   jwt.verify(refreshToken, process.env.JWT_SECRET, (err, user) => {
     if (err) return res.sendStatus(403);
     const accessToken = generateAccessToken(user);
+    const cookieSameSite = process.env.NODE_ENV === 'production' ? 'none' : 'lax';
+    const cookieSecure = process.env.NODE_ENV === 'production';
     res.cookie('accessToken', accessToken, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
+      secure: cookieSecure,
+      sameSite: cookieSameSite,
       maxAge: 15 * 60 * 1000
     });
     res.json({ success: true });
