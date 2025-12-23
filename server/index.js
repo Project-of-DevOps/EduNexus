@@ -71,14 +71,29 @@ if (process.env.VITE_API_URL) {
     allowedOrigins.push(clientUrl.origin);
   } catch (e) { /* ignore invalid URL */ }
 }
-app.use(cors({
-  origin: function(origin, callback) {
-    // Allow requests with no origin (curl, mobile) or from whitelisted origins
-    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+const localOriginRegex = /^https?:\/\/(?:localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(?:1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+)(?::\d+)?$/i;
+
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow requests with no origin (curl, mobile)
+    if (!origin) return callback(null, true);
+    // Allow entries explicitly whitelisted (production or known hosts)
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    // Allow common local network origins (e.g., 10.x.x.x:3000, 192.168.*, localhost)
+    if (localOriginRegex.test(origin)) return callback(null, true);
     callback(new Error('Not allowed by CORS'));
   },
-  credentials: true
-}));
+  credentials: true,
+  optionsSuccessStatus: 200
+};
+
+app.use(cors(corsOptions));
+
+// Ensure preflight OPTIONS are handled with the same CORS policy
+app.use((req, res, next) => {
+  if (req.method === 'OPTIONS') return cors(corsOptions)(req, res, next);
+  return next();
+});
 
 app.use(cookieParser());
 
@@ -1182,7 +1197,24 @@ const handleSignupAsync = async (req, res, next) => {
     // Accept any email format for now (you can restrict to gmail only if needed)
     if (!email) return res.status(400).json({ error: 'Email required' });
 
-    // Check existing user
+    // Prevent duplicates across Supabase (when configured) and local Postgres.
+    // If Supabase has an existing user with this email, prefer that as the source of truth
+    // and avoid creating a conflicting local account.
+    try {
+      if (supabase) {
+        const { data: sbUser, error: sbErr } = await supabase.from('users').select('id,email').ilike('email', email).maybeSingle();
+        if (sbErr) {
+          logger.warn('Supabase lookup failed during signup (continuing with local db):', sbErr.message || sbErr);
+        } else if (sbUser && sbUser.email) {
+          // Found existing user in Supabase — abort to avoid duplicate accounts
+          return res.status(409).json({ error: 'Email already registered via Supabase. Please sign in or use SSO.' });
+        }
+      }
+    } catch (checkErr) {
+      logger.warn('Error checking Supabase for existing user', checkErr?.message || checkErr);
+    }
+
+    // Check existing user in local Postgres
     const existing = await pool.query('SELECT id FROM users WHERE LOWER(email) = LOWER($1) AND role = $2', [email, role]);
     if (existing && existing.rows && existing.rows.length) return res.status(409).json({ error: 'user already exists' });
 
@@ -1484,7 +1516,7 @@ app.post('/api/py/signin', async (req, res) => {
     const user = users[0];
 
     // DEBUG LOGGING
-    console.log(`[Signin Debug] Email: ${email}, FoundUser: ${user.email}, Role: ${user.role}, HashPrefix: ${user.password_hash ? user.password_hash.substring(0, 7) : 'NONE'}`);
+
 
     // 2. Validate Password
     const hash = user.password_hash;
@@ -1509,7 +1541,7 @@ app.post('/api/py/signin', async (req, res) => {
     }
 
     if (!match) {
-      console.log(`[Signin Debug] Password mismatch for ${email}. Supplied password length: ${password.length}`);
+
       return res.status(400).json({ detail: "Wrong password" });
     }
 

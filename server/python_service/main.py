@@ -22,14 +22,32 @@ if not url or not key:
 
 app = FastAPI()
 
+# Build allowed origin list and regex for local dev/private LAN IPs
+_allowed_origins = ["http://localhost:5173", "https://edunexus-frontend-v2.onrender.com"]
+# If front-end origin is provided via env, add its origin
+_client_origin = os.environ.get("VITE_API_URL") or os.environ.get("CLIENT_ORIGIN")
+if _client_origin:
+    try:
+        from urllib.parse import urlparse
+        p = urlparse(_client_origin)
+        origin = f"{p.scheme}://{p.netloc}"
+        if origin not in _allowed_origins:
+            _allowed_origins.append(origin)
+    except Exception:
+        pass
+
+# Allow private LAN origins via regex (10.x.x.x, 192.168.x.x, 172.16-31.x.x, localhost)
+_local_origin_regex = r"^https?:\/\/(?:(?:localhost|127\.0\.0\.1)|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(?:1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+)(?::\d+)?$"
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_origin_regex=None,
+    allow_origins=_allowed_origins,
+    allow_origin_regex=_local_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse

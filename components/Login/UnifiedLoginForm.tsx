@@ -8,7 +8,7 @@ import Input from '../ui/Input';
 import Card from '../ui/Card';
 import OTPModal from '../auth/OTPModal';
 import { supabase } from '../../services/supabaseClient';
-import { getPythonApiUrl } from '../../utils/config';
+import { getPythonApiUrl, getApiUrl } from '../../utils/config';
 
 const roles = [
     { id: UserRole.Management, label: 'Management' },
@@ -291,8 +291,8 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
         // Check email for both Login and Signup
         setLoading(true);
         try {
-            const pythonUrl = getPythonApiUrl();
-            const res = await fetch(`${pythonUrl}/api/py/check-email`, {
+            const apiUrl = getApiUrl();
+            const res = await fetch(`${apiUrl}/api/py/check-email`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ email })
@@ -468,7 +468,7 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
             const { data: sessionData } = await supabase.auth.getSession();
             const token = sessionData?.session?.access_token || (sessionData as any)?.access_token || null;
 
-            const apiUrl = (import.meta as any).env?.VITE_API_URL || 'http://localhost:4000';
+            const apiUrl = getApiUrl();
             const body: any = { role: chosen.role };
             if (token) body.accessToken = token;
             else if (chosen.email) body.email = chosen.email;
@@ -476,6 +476,7 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
             const resp = await fetch(`${apiUrl}/api/auth/google-login`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
                 body: JSON.stringify(body)
             });
 
@@ -518,7 +519,7 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
 
         try {
             // Check if user exists first
-            const apiUrl = (import.meta as any).env?.VITE_API_URL || `http://${window.location.hostname}:4000`;
+            const apiUrl = getApiUrl();
             const checkRes = await fetch(`${apiUrl}/api/auth/check-email`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -560,7 +561,7 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
     // Resend OTP helper used by OTPModal
     const resendOtp = async () => {
         if (!email.trim()) throw new Error('Email missing');
-        const apiUrl = (import.meta as any).env?.VITE_API_URL || 'http://localhost:4000';
+        const apiUrl = getApiUrl();
         try {
             const extras: any = {};
             if (activeRole !== UserRole.Librarian) {

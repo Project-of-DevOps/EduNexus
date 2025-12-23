@@ -16,3 +16,12 @@ export const getPythonApiUrl = (): string => {
     const hostname = window.location.hostname;
     return `http://${hostname}:8000`;
 };
+
+// Centralized Node API URL helper. Prefers VITE_API_URL when set, otherwise
+// constructs a URL using the current window.location.hostname and port 4000.
+export const getApiUrl = (): string => {
+    if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL.replace(/\/$/, '');
+    const protocol = window.location.protocol || 'http:';
+    const hostname = window.location.hostname;
+    return `${protocol}//${hostname}:4000`;
+};

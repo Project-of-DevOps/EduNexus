@@ -4,7 +4,7 @@ import { LoggedInUser, UserRole, Student, Teacher, Parent } from '../types';
 
 import { useData } from './DataContext';
 import { supabase } from '../services/supabaseClient';
-import { getPythonApiUrl } from '../utils/config';
+import { getApiUrl } from '../utils/config';
 
 interface AuthContextType {
   user: LoggedInUser | null;
@@ -108,7 +108,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         const storedRole = sessionStorage.getItem('edunexus:sso_role') as UserRole | null;
         console.log('Supabase Signed In, verifying with backend. Role:', storedRole);
 
-        const apiUrl = (import.meta as any).env?.VITE_API_URL || `http://${window.location.hostname}:4000`;
+        const apiUrl = getApiUrl();
         try {
           // Prefer sending accessToken for server-side verification
           const accessToken = session.access_token || (session?.provider_token || null);
@@ -238,7 +238,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     // Server-Side Login with Strict Validation
     try {
-      const apiUrl = getPythonApiUrl();
+      const apiUrl = getApiUrl();
 
       const payload: any = {
         email,
@@ -250,6 +250,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const res = await fetch(`${apiUrl}/api/py/signin`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify(payload)
       });
 
@@ -341,9 +342,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
 
     // Persist users to the python server when available (triggers welcome email)
-    const pythonUrl = getPythonApiUrl();
+    const apiUrl = getApiUrl();
     try {
-      const resp = await fetch(`${pythonUrl}/api/py/signup`, {
+      const resp = await fetch(`${apiUrl}/api/py/signup`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, email, password, role, extra }) // Python expects { name, email, password, role } mostly
@@ -413,7 +414,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       return { success: true };
     }
 
-    const apiUrl = (import.meta as any).env?.VITE_API_URL || `http://${window.location.hostname}:4000`;
+    const apiUrl = getApiUrl();
     try {
       const res = await fetch(`${apiUrl}/api/auth/change-password`, {
         method: 'POST',

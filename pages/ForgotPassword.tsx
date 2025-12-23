@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Card from '../components/ui/Card';
+import { getApiUrl } from '../utils/config';
 
 const ForgotPassword: React.FC = () => {
     const navigate = useNavigate();
@@ -17,7 +18,7 @@ const ForgotPassword: React.FC = () => {
         setLoading(true);
 
         try {
-            const apiUrl = (import.meta as any).env?.VITE_API_URL || 'http://localhost:4000';
+            const apiUrl = getApiUrl();
             const response = await fetch(`${apiUrl}/api/forgot-password`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
