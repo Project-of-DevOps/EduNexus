@@ -155,6 +155,7 @@ app.post('/api/py/check-email', async (req, res) => {
   if (!email) return res.status(400).json({ detail: "Email required" });
 
   try {
+    if (!supabase) throw new Error("Supabase not configured on server");
     const { data: users, error } = await supabase
       .from('users')
       .select('id')
@@ -1408,167 +1409,6 @@ app.post('/api/queue-signups/:id/retry', async (req, res, next) => {
     // insert into users using provided password_hash
     const insert = await pool.query('INSERT INTO users (name,email,password_hash,role,extra) VALUES ($1,$2,$3,$4,$5) RETURNING id,name,email,role,created_at', [item.name || null, item.email, item.password_hash, 'Management', item.extra || {}]);
 
-    // Org Code Analytics (Missing Endpoint Fix)
-    app.get('/api/org-code/analytics', authenticateToken, async (req, res) => {
-      try {
-        const { rows: stats } = await pool.query(`
-            SELECT 
-                COUNT(*) FILTER (WHERE status = 'pending') as pending_requests,
-                COUNT(*) FILTER (WHERE status = 'confirmed') as approved_requests,
-                COUNT(*) as total_requests
-            FROM org_code_requests
-        `);
-        res.json(stats[0]);
-      } catch (e) {
-        logger.error('Failed to fetch org code analytics', e);
-        res.json({ pending_requests: 0, approved_requests: 0, total_requests: 0 }); // Fallback
-      }
-    });
-
-    // View Pending Requests (Missing Endpoint Fix)
-    app.get('/api/org-code/requests', authenticateToken, async (req, res) => {
-      try {
-        const { rows } = await pool.query("SELECT * FROM org_code_requests ORDER BY created_at DESC");
-        res.json(rows);
-      } catch (e) {
-        logger.error('Failed to fetch org code requests', e);
-        res.status(500).json({ error: 'Failed to fetch requests' });
-      }
-    });
-
-    // 8. Sign In (Strict Validation Migration)
-    app.post('/api/py/signin', async (req, res) => {
-      const { email, password, role, extra } = req.body;
-      if (!email || !password || !role) return res.status(400).json({ error: "Missing credentials" });
-
-      try {
-        // 1. Auth Login (Fetch User)
-        const { data: users, error } = await supabase
-          .from('users')
-          .select('id, name, email, password_hash, role, extra, created_at')
-          .eq('email', email)
-
-        if (error || !users || users.length === 0) {
-          return res.status(400).json({ detail: "Unregistered email" });
-        }
-
-        const user = users[0];
-
-        // 2. Validate Password
-        const match = await bcrypt.compare(password, user.password_hash);
-        if (!match) return res.status(400).json({ detail: "Wrong password" });
-
-        // 3. User Role Mismatch Check
-        if (user.role !== role) {
-          return res.status(400).json({ detail: "Role mismatch" });
-        }
-
-        // 4. Strict Code & Org Name Validation (Teacher/Student/Parent)
-        if (['Teacher', 'Student', 'Parent'].includes(role)) {
-          const reqCode = extra?.uniqueId || extra?.code;
-          const reqOrgName = extra?.instituteName || extra?.orgName || extra?.schoolName;
-
-          if (reqCode) {
-            // Validate Code
-            const { data: codeData, error: codeErr } = await supabase
-              .from('org_codes')
-              .select('*')
-              .eq('code', reqCode)
-              .maybeSingle();
-
-            if (!codeData) return res.status(400).json({ detail: "Invalid Code" });
-
-            // Fix 1: Login Type Mismatch
-            const reqLoginType = extra?.orgType;
-            if (reqLoginType) {
-              const dbOrgType = (codeData.type || "").toLowerCase();
-              if (reqLoginType.toLowerCase().trim() !== dbOrgType) {
-                return res.status(400).json({ detail: `Invalid Login Type: You selected ${reqLoginType} but code is for ${dbOrgType}` });
-              }
-            }
-
-            // Fix 2: Name Mismatch
-            if (reqOrgName) {
-              const dbOrgId = codeData.institute_id;
-              const dbOrgType = (codeData.type || "").toLowerCase();
-              let nameMatch = false;
-
-              if (dbOrgId && dbOrgId.toLowerCase().trim() === reqOrgName.toLowerCase().trim()) {
-                nameMatch = true;
-              } else if (dbOrgId) {
-                const table = dbOrgType === 'institute' ? 'institutes' : 'schools';
-                try {
-                  const { data: orgRes } = await supabase.from(table).select('name').eq('id', dbOrgId).maybeSingle();
-                  if (orgRes && orgRes.name.toLowerCase().trim() === reqOrgName.toLowerCase().trim()) {
-                    nameMatch = true;
-                  }
-                } catch (err) { /* ignore lookup fail */ }
-              }
-
-              if (!nameMatch) {
-                const msg = dbOrgType === 'institute' ? "Institute Name Mismatch" : "School Name Mismatch";
-                return res.status(400).json({ detail: msg });
-              }
-            }
-          }
-        }
-
-        // 5. Status Check (Teachers)
-        if (role === 'Teacher') {
-          const { data: tData } = await supabase.from('teachers').select('status').eq('user_id', user.id).maybeSingle();
-          if (tData) {
-            if (tData.status === 'pending') return res.status(403).json({ detail: "Waiting for Management Approval" });
-            if (tData.status === 'rejected') return res.status(403).json({ detail: "Request was Rejected" });
-          }
-        }
-
-        // 6. Generate Session
-        const sessToken = generateAccessToken(user);
-        const refreshToken = generateRefreshToken(user);
-
-        const cookieOpts = {
-          httpOnly: true,
-          secure: true,
-          sameSite: 'none',
-          maxAge: 15 * 60 * 1000
-        };
-
-        const refreshCookieOpts = {
-          httpOnly: true,
-          secure: true,
-          sameSite: 'none',
-          maxAge: 7 * 24 * 60 * 60 * 1000
-        };
-
-        res.cookie('accessToken', sessToken, cookieOpts);
-        res.cookie('refreshToken', refreshToken, refreshCookieOpts);
-
-        // 7. Fetch Dashboard State
-        let dashboardState = {};
-        let dashboardError = false;
-        try {
-          const { data: dState } = await supabase.from('user_dashboard_states').select('state_data').eq('user_id', user.id).maybeSingle();
-          if (dState) dashboardState = dState.state_data;
-        } catch (err) { dashboardError = true; }
-
-        // Return py-compatible JSON
-        const userSafe = { ...user };
-        delete userSafe.password_hash;
-
-        res.json({
-          success: true,
-          token: sessToken,
-          user: userSafe,
-          dashboard_state: dashboardState,
-          dashboard_error: dashboardError
-        });
-
-      } catch (e) {
-        logger.error('Error in py/signin proxy:', e);
-        res.status(500).json({ detail: `Internal Server Error: ${e.message}` });
-      }
-    });
-
     await pool.query('INSERT INTO signup_syncs (email, status, attempts, note) VALUES ($1,$2,$3,$4)', [item.email, 'synced', item.attempts + 1, 'synced by admin retry']);
 
     res.json({ success: true, user: insert.rows[0] });
@@ -1579,6 +1419,168 @@ app.post('/api/queue-signups/:id/retry', async (req, res, next) => {
       await pool.query('UPDATE signup_queue SET status=$1, attempts = COALESCE(attempts,0)+1, note=$2 WHERE id=$3', ['failed', String(e?.message || 'error'), id]);
     } catch (ignore) { }
     next(e);
+  }
+});
+
+// Org Code Analytics (Missing Endpoint Fix)
+app.get('/api/org-code/analytics', authenticateToken, async (req, res) => {
+  try {
+    const { rows: stats } = await pool.query(`
+            SELECT 
+                COUNT(*) FILTER (WHERE status = 'pending') as pending_requests,
+                COUNT(*) FILTER (WHERE status = 'confirmed') as approved_requests,
+                COUNT(*) as total_requests
+            FROM org_code_requests
+        `);
+    res.json(stats[0]);
+  } catch (e) {
+    logger.error('Failed to fetch org code analytics', e);
+    res.json({ pending_requests: 0, approved_requests: 0, total_requests: 0 }); // Fallback
+  }
+});
+
+// View Pending Requests (Missing Endpoint Fix)
+app.get('/api/org-code/requests', authenticateToken, async (req, res) => {
+  try {
+    const { rows } = await pool.query("SELECT * FROM org_code_requests ORDER BY created_at DESC");
+    res.json(rows);
+  } catch (e) {
+    logger.error('Failed to fetch org code requests', e);
+    res.status(500).json({ error: 'Failed to fetch requests' });
+  }
+});
+
+// 8. Sign In (Strict Validation Migration)
+app.post('/api/py/signin', async (req, res) => {
+  const { email, password, role, extra } = req.body;
+  if (!email || !password || !role) return res.status(400).json({ error: "Missing credentials" });
+
+  try {
+    if (!supabase) throw new Error("Supabase not configured on server");
+    // 1. Auth Login (Fetch User)
+    const { data: users, error } = await supabase
+      .from('users')
+      .select('id, name, email, password_hash, role, extra, created_at')
+      .eq('email', email)
+
+    if (error || !users || users.length === 0) {
+      return res.status(400).json({ detail: "Unregistered email" });
+    }
+
+    const user = users[0];
+
+    // 2. Validate Password
+    const match = await bcrypt.compare(password, user.password_hash);
+    if (!match) return res.status(400).json({ detail: "Wrong password" });
+
+    // 3. User Role Mismatch Check
+    if (user.role !== role) {
+      return res.status(400).json({ detail: "Role mismatch" });
+    }
+
+    // 4. Strict Code & Org Name Validation (Teacher/Student/Parent)
+    if (['Teacher', 'Student', 'Parent'].includes(role)) {
+      const reqCode = extra?.uniqueId || extra?.code;
+      const reqOrgName = extra?.instituteName || extra?.orgName || extra?.schoolName;
+
+      if (reqCode) {
+        // Validate Code
+        const { data: codeData, error: codeErr } = await supabase
+          .from('org_codes')
+          .select('*')
+          .eq('code', reqCode)
+          .maybeSingle();
+
+        if (!codeData) return res.status(400).json({ detail: "Invalid Code" });
+
+        // Fix 1: Login Type Mismatch
+        const reqLoginType = extra?.orgType;
+        if (reqLoginType) {
+          const dbOrgType = (codeData.type || "").toLowerCase();
+          if (reqLoginType.toLowerCase().trim() !== dbOrgType) {
+            return res.status(400).json({ detail: `Invalid Login Type: You selected ${reqLoginType} but code is for ${dbOrgType}` });
+          }
+        }
+
+        // Fix 2: Name Mismatch
+        if (reqOrgName) {
+          const dbOrgId = codeData.institute_id;
+          const dbOrgType = (codeData.type || "").toLowerCase();
+          let nameMatch = false;
+
+          if (dbOrgId && dbOrgId.toLowerCase().trim() === reqOrgName.toLowerCase().trim()) {
+            nameMatch = true;
+          } else if (dbOrgId) {
+            const table = dbOrgType === 'institute' ? 'institutes' : 'schools';
+            try {
+              const { data: orgRes } = await supabase.from(table).select('name').eq('id', dbOrgId).maybeSingle();
+              if (orgRes && orgRes.name.toLowerCase().trim() === reqOrgName.toLowerCase().trim()) {
+                nameMatch = true;
+              }
+            } catch (err) { /* ignore lookup fail */ }
+          }
+
+          if (!nameMatch) {
+            const msg = dbOrgType === 'institute' ? "Institute Name Mismatch" : "School Name Mismatch";
+            return res.status(400).json({ detail: msg });
+          }
+        }
+      }
+    }
+
+    // 5. Status Check (Teachers)
+    if (role === 'Teacher') {
+      const { data: tData } = await supabase.from('teachers').select('status').eq('user_id', user.id).maybeSingle();
+      if (tData) {
+        if (tData.status === 'pending') return res.status(403).json({ detail: "Waiting for Management Approval" });
+        if (tData.status === 'rejected') return res.status(403).json({ detail: "Request was Rejected" });
+      }
+    }
+
+    // 6. Generate Session
+    const sessToken = generateAccessToken(user);
+    const refreshToken = generateRefreshToken(user);
+
+    const cookieOpts = {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'none',
+      maxAge: 15 * 60 * 1000
+    };
+
+    const refreshCookieOpts = {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'none',
+      maxAge: 7 * 24 * 60 * 60 * 1000
+    };
+
+    res.cookie('accessToken', sessToken, cookieOpts);
+    res.cookie('refreshToken', refreshToken, refreshCookieOpts);
+
+    // 7. Fetch Dashboard State
+    let dashboardState = {};
+    let dashboardError = false;
+    try {
+      const { data: dState } = await supabase.from('user_dashboard_states').select('state_data').eq('user_id', user.id).maybeSingle();
+      if (dState) dashboardState = dState.state_data;
+    } catch (err) { dashboardError = true; }
+
+    // Return py-compatible JSON
+    const userSafe = { ...user };
+    delete userSafe.password_hash;
+
+    res.json({
+      success: true,
+      token: sessToken,
+      user: userSafe,
+      dashboard_state: dashboardState,
+      dashboard_error: dashboardError
+    });
+
+  } catch (e) {
+    logger.error('Error in py/signin proxy:', e);
+    res.status(500).json({ detail: `Internal Server Error: ${e.message}` });
   }
 });
 
