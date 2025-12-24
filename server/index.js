@@ -107,6 +107,8 @@ app.use((req, res, next) => {
 
 app.use(cookieParser());
 
+app.use(express.json());
+
 // Rate Limiting
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -121,12 +123,17 @@ app.use('/api/login', authLimiter);
 app.use('/api/signup', authLimiter);
 app.use('/api/forgot-password', authLimiter);
 
+
+const authStrictRoutes = require('./routes/auth-strict');
+app.use('/api/auth-strict', authStrictRoutes);
+
 const managementRoutes = require('./routes/management');
 app.use('/api/management', managementRoutes);
 
-app.use(express.json());
+
 
 const PORT = process.env.PORT || 4000;
+
 
 // Health check (basic)
 app.get('/health', (req, res) => {
@@ -1253,8 +1260,8 @@ const handleSignupAsync = async (req, res, next) => {
       logger.warn('Error checking Supabase for existing user', checkErr?.message || checkErr);
     }
 
-    // Check existing user in local Postgres
-    const existing = await pool.query('SELECT id FROM users WHERE LOWER(email) = LOWER($1) AND role = $2', [email, role]);
+    // Check existing user in local Postgres (unique across all roles)
+    const existing = await pool.query('SELECT id FROM users WHERE LOWER(email) = LOWER($1)', [email]);
     if (existing && existing.rows && existing.rows.length) return res.status(409).json({ error: 'user already exists' });
 
     // Organization & Linking Logic
@@ -1337,6 +1344,10 @@ const handleSignupAsync = async (req, res, next) => {
 
     } catch (dbErr) {
       logger.error('DB insert failed in handleSignup', dbErr?.message || dbErr);
+      // Unique constraint (duplicate email/username) -> return 409
+      if (dbErr && dbErr.code === '23505') {
+        return res.status(409).json({ error: 'Email or username already exists' });
+      }
       // Only persist to disk queue if database is completely down
       if (dbErr.message && dbErr.message.includes('connection')) {
         logger.warn('Database connection failed, queueing signup to disk', dbErr?.message);
