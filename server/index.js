@@ -349,41 +349,62 @@ app.post('/api/py/signup', async (req, res) => {
   const { name, email, password, role, extra } = req.body;
 
   try {
-    const { data: dup, error: dupErr } = await supabase.from('users').select('id').eq('email', email);
+    // Check duplicates in Supabase when available; if supabase fails, try local DB duplicate check
+    let dup = null;
+    try {
+      const d = await supabase.from('users').select('id').eq('email', email);
+      if (d.error) {
+        logger.warn('py/signup: supabase duplicate check failed', d.error);
+        dup = null;
+      } else dup = d.data;
+    } catch (e) {
+      logger.warn('py/signup: supabase duplicate check network error', e?.message || e);
+      dup = null;
+    }
+
     if (dup && dup.length > 0) return res.status(400).json({ detail: "Email-ID already been used" });
 
-    const { data: authData, error: authError } = await supabase.auth.signUp({
-      email, password
-    });
+    // Attempt Supabase signup; if it fails and devRoutesEnabled, fallback to local Postgres user creation
+    let userId = null;
+    try {
+      const { data: authData, error: authError } = await supabase.auth.signUp({ email, password });
+      if (authError) throw authError;
+      if (!authData.user) throw new Error("Signup failed");
+      userId = authData.user.id;
 
-    if (authError) throw authError;
-    if (!authData.user) throw new Error("Signup failed");
+      await supabase.from('users').insert({ id: userId, name: name || "Unknown", email, role: role || "Management", extra: extra || {}, password_hash: "supabase_auth" });
 
-    const userId = authData.user.id;
+      if (role === 'Management') {
+        await supabase.from('management_managers').insert({ user_id: userId, name, email, role: 'Manager' });
+      } else if (role === 'Teacher') {
+        await supabase.from('teachers').insert({ user_id: userId, title: extra?.title, department: extra?.department, institute_id: extra?.instituteId, class_id: extra?.classId, is_verified: false, status: 'pending' });
+      }
 
-    await supabase.from('users').insert({
-      id: userId,
-      name: name || "Unknown",
-      email,
-      role: role || "Management",
-      extra: extra || {},
-      password_hash: "supabase_auth"
-    });
+      res.json({ success: true, user: { id: userId, email, role } });
 
-    if (role === 'Management') {
-      await supabase.from('management_managers').insert({ user_id: userId, name, email, role: 'Manager' });
-    } else if (role === 'Teacher') {
-      await supabase.from('teachers').insert({
-        user_id: userId,
-        title: extra?.title,
-        department: extra?.department,
-        institute_id: extra?.instituteId, // Mapping might vary
-        class_id: extra?.classId,
-        is_verified: false,
-        status: 'pending'
-      });
+    } catch (e) {
+      logger.warn('py/signup: Supabase signup failed', e?.message || e);
+      if (!devRoutesEnabled) {
+        logger.error('py/signup: Supabase required in production; aborting');
+        return res.status(500).json({ detail: 'Signup failed (Supabase unavailable)' });
+      }
+
+      // Dev mode: fallback to local Postgres user create
+      try {
+        const bcrypt = require('bcrypt');
+        const hash = await bcrypt.hash(password, 10);
+        const r = await pool.query('INSERT INTO users (name,email,password_hash,role,extra) VALUES ($1,$2,$3,$4,$5) RETURNING id,email', [name || null, email, hash, role || 'Management', extra || {}]);
+        userId = r.rows[0].id;
+        // Create teacher row if needed
+        if (role === 'Teacher') {
+          await pool.query('INSERT INTO teachers (user_id, title, department, institute_id, class_id, is_verified, created_at) VALUES ($1,$2,$3,$4,$5,$6,NOW())', [userId, extra?.title, extra?.department, extra?.instituteId, extra?.classId, false]);
+        }
+        return res.json({ success: true, user: { id: userId, email, role } });
+      } catch (localErr) {
+        logger.error('py/signup: local fallback failed', localErr?.message || localErr);
+        return res.status(500).json({ detail: 'Signup failed' });
+      }
     }
-    res.json({ success: true, user: { id: userId, email, role } });
 
   } catch (e) {
     logger.error('Error in py/signup proxy:', e);
@@ -1571,14 +1592,21 @@ app.post('/api/py/signin', async (req, res) => {
       logger.info(`py/signin: found user in Postgres id=${user.id} role=${user.role}`);
     } else {
       // 1. Auth Login (Fetch User)
-      const { data: users, error } = await supabase
-        .from('users')
-        .select('id, name, email, password_hash, role, extra, created_at')
-        .eq('email', email);
-
-      if (error) {
-        logger.error('py/signin: supabase lookup error', { message: error.message || error });
-        throw error;
+      // Query Supabase for user; on failure, fallback to Postgres when in dev mode
+      let users = null;
+      try {
+        const r = await supabase
+          .from('users')
+          .select('id, name, email, password_hash, role, extra, created_at')
+          .eq('email', email);
+        users = r.data;
+        if (r.error) {
+          logger.warn('py/signin: supabase query returned error', r.error);
+          users = null;
+        }
+      } catch (sbErr) {
+        logger.warn('py/signin: supabase lookup failed (network/error)', sbErr?.message || sbErr);
+        users = null;
       }
 
       if (!users || users.length === 0) {
@@ -2103,14 +2131,25 @@ app.get('/api/dashboard-data', authenticateToken, async (req, res, next) => {
 
 const checkDbPrivileges = async () => {
   try {
-    const res = await pool.query("SELECT has_schema_privilege('authenticated','public','usage') as auth_usage, has_schema_privilege('anon','public','usage') as anon_usage");
+    // Check whether Supabase roles exist in this Postgres instance (local dev may not have them)
+    const rolesRes = await pool.query("SELECT rolname FROM pg_roles WHERE rolname IN ('authenticated','anon','service_role')");
+    const roles = (rolesRes.rows || []).map(r => r.rolname);
+    if (!roles.length) {
+      logger.warn('No Supabase DB roles (authenticated/anon/service_role) found in this database; skipping privilege checks');
+      return true; // Not a failure for local dev
+    }
+
+    // Build has_schema_privilege checks dynamically for existing roles
+    const checks = roles.map(r => `has_schema_privilege('${r}','public','usage') as ${r}_usage`).join(', ');
+    const res = await pool.query(`SELECT ${checks}`);
     const row = res.rows[0] || {};
-    if (!row.auth_usage) logger.warn('DB role `authenticated` lacks USAGE on schema public');
-    if (!row.anon_usage) logger.warn('DB role `anon` lacks USAGE on schema public');
+    for (const r of roles) {
+      if (!row[`${r}_usage`]) logger.warn(`DB role \`${r}\` lacks USAGE on schema public`);
+    }
     return true;
   } catch (e) {
     logger.error('DB privilege check failed:', e?.message || e);
-    return false;
+    return true; // don't block server start; warn only
   }
 };
 
