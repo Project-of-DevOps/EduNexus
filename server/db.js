@@ -13,10 +13,11 @@ const createPool = () => {
     try {
         const connectionString = process.env.DATABASE_URL;
         // Use Pool for better connection management in a server environment
+        const useSsl = (process.env.DB_SSL === 'true') || (connectionString && connectionString.includes('sslmode=require')) || (process.env.NODE_ENV === 'production');
         const poolConfig = {
             connectionString,
             connectionTimeoutMillis: 30000,
-            ssl: { rejectUnauthorized: false } // Required for Supabase usually, verify if problematic locally
+            ssl: useSsl ? { rejectUnauthorized: false } : false
         };
         // If specific parsing is needed, we can do it, but connectionString usually suffices for pg
         return new Pool(poolConfig);
