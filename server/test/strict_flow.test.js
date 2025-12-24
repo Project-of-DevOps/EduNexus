@@ -60,12 +60,12 @@ describe('Strict flow integration test', () => {
 
   it('ensures unique email across users', async () => {
     // Try to insert duplicate profile email
-    const res = await pool.query("SELECT id FROM public.profiles WHERE email = 'bart@edu.com'");
+    const res = await pool.query("SELECT id FROM public.users WHERE email = 'bart@edu.com'");
     expect(res.rows.length).toBe(1);
 
     let failed = false;
     try {
-      await pool.query("INSERT INTO public.profiles (id,email,full_name,role) VALUES (gen_random_uuid(),'bart@edu.com','Duplicate Bart','student')");
+      await pool.query("INSERT INTO public.users (id,email,full_name,role) VALUES (gen_random_uuid(),'bart@edu.com','Duplicate Bart','student')");
     } catch (e) {
       failed = true;
       // expecting unique violation
