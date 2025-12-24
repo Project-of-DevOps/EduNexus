@@ -2101,9 +2101,27 @@ app.get('/api/dashboard-data', authenticateToken, async (req, res, next) => {
 
 // End of migrated endpoints (Removed duplicates)
 
+const checkDbPrivileges = async () => {
+  try {
+    const res = await pool.query("SELECT has_schema_privilege('authenticated','public','usage') as auth_usage, has_schema_privilege('anon','public','usage') as anon_usage");
+    const row = res.rows[0] || {};
+    if (!row.auth_usage) logger.warn('DB role `authenticated` lacks USAGE on schema public');
+    if (!row.anon_usage) logger.warn('DB role `anon` lacks USAGE on schema public');
+    return true;
+  } catch (e) {
+    logger.error('DB privilege check failed:', e?.message || e);
+    return false;
+  }
+};
 
 if (require.main === module) {
-  app.listen(PORT, '0.0.0.0', () => logger.info(`edunexus server listening on ${PORT}`));
+  (async () => {
+    const ok = await checkDbPrivileges();
+    if (!ok) {
+      logger.warn('DB privilege check failed - attempting to continue; consider running server/grant_schema_permissions.py or applying `012_grant_schema_usage.sql`');
+    }
+    app.listen(PORT, '0.0.0.0', () => logger.info(`edunexus server listening on ${PORT}`));
+  })();
 }
 
 // allow overriding pool for tests
