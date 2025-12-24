@@ -10,8 +10,14 @@ process.on('unhandledRejection', (reason, promise) => {
 console.log('Server is starting...');
 // ------------------------------------------------------------------
 
-require('dotenv').config();
-console.log('Server starting... Environment loaded.');
+try {
+  require('dotenv').config();
+  // Also load from parent directory .env if it exists (shared env vars)
+  require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
+  console.log('Server starting... Environment loaded via dotenv.');
+} catch (e) {
+  console.warn('dotenv not installed or failed to load - continuing without .env');
+}
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
@@ -53,6 +59,10 @@ if (supabaseUrl && supabaseKey) {
 } else {
   logger.warn("Supabase credentials missing. Migrated Python endpoints will fail.");
 }
+
+// Dev routes / fallbacks enabled when explicitly set or when not in production
+const devRoutesEnabled = process.env.ENABLE_DEV_ROUTES === 'true' || process.env.NODE_ENV !== 'production';
+logger.info(`Dev routes enabled: ${devRoutesEnabled}`);
 
 const app = express();
 
@@ -118,6 +128,11 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 4000;
 
+// Health check (basic)
+app.get('/health', (req, res) => {
+  return res.json({ status: 'ok', supabaseConfigured: !!supabase, devRoutesEnabled });
+});
+
 // Request Logging Middleware
 app.use((req, res, next) => {
   logger.info(`${req.method} ${req.url}`);
@@ -180,17 +195,41 @@ app.post('/api/py/check-email', async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ detail: "Email required" });
 
+  logger.info(`py/check-email called for email=${email} origin=${req.get('origin') || 'none'} supabaseConfigured=${!!supabase} dev=${devRoutesEnabled}`);
+
   try {
-    if (!supabase) throw new Error("Supabase not configured on server");
+    if (!supabase) {
+      if (!devRoutesEnabled) {
+        logger.warn('py/check-email: Supabase not configured and dev routes disabled');
+        return res.status(500).json({ detail: 'Supabase not configured' });
+      }
+
+      logger.warn('py/check-email: Supabase not configured on server — using Postgres fallback (dev)');
+      try {
+        const r = await pool.query('SELECT 1 FROM users WHERE LOWER(email)=LOWER($1)', [email]);
+        const exists = r.rowCount > 0;
+        logger.info(`py/check-email: local Postgres lookup result exists=${exists}`);
+        return res.json({ exists, debug: { source: 'postgres', exists } });
+      } catch (pgErr) {
+        logger.warn('py/check-email: local Postgres lookup failed', pgErr?.message || pgErr);
+        return res.status(500).json({ detail: 'Supabase not configured and Postgres lookup failed' });
+      }
+    }
+
     const { data: users, error } = await supabase
       .from('users')
-      .select('id')
+      .select('id,email')
       .eq('email', email);
 
-    if (error) throw error;
+    if (error) {
+      logger.error('py/check-email: supabase error', { message: error.message || error });
+      throw error;
+    }
 
+    const exists = (users && users.length > 0);
+    logger.info(`py/check-email: supabase lookup users=${users?.length || 0} sample=${users && users[0] ? JSON.stringify({ id: users[0].id, email: users[0].email }) : null}`);
     // Return format matching python
-    res.json({ exists: users.length > 0 });
+    res.json({ exists });
   } catch (e) {
     logger.error('Error in check-email:', e);
     res.status(500).json({ detail: e.message });
@@ -1501,22 +1540,60 @@ app.post('/api/py/signin', async (req, res) => {
   const { email, password, role, extra } = req.body;
   if (!email || !password || !role) return res.status(400).json({ error: "Missing credentials" });
 
+  logger.info(`py/signin attempt for email=${email} role=${role} origin=${req.get('origin') || 'none'} supabaseConfigured=${!!supabase}`);
+
   try {
-    if (!supabase) throw new Error("Supabase not configured on server");
-    // 1. Auth Login (Fetch User)
-    const { data: users, error } = await supabase
-      .from('users')
-      .select('id, name, email, password_hash, role, extra, created_at')
-      .eq('email', email)
+    let user = null;
 
-    if (error || !users || users.length === 0) {
-      return res.status(400).json({ detail: "Unregistered email" });
+    if (!supabase) {
+      if (!devRoutesEnabled) {
+        logger.warn('py/signin: Supabase not configured and dev routes disabled');
+        return res.status(500).json({ error: 'Supabase not configured' });
+      }
+      logger.warn('py/signin: Supabase not configured on server — falling back to local Postgres (dev)');
+      const r = await pool.query('SELECT id,name,email,password_hash,role,extra,created_at FROM users WHERE LOWER(email)=LOWER($1) LIMIT 1', [email]);
+      if (!r.rows.length) {
+        logger.info('py/signin: local Postgres did not find user');
+        return res.status(400).json({ detail: "Unregistered email" });
+      }
+      user = r.rows[0];
+      logger.info(`py/signin: found user in Postgres id=${user.id} role=${user.role}`);
+    } else {
+      // 1. Auth Login (Fetch User)
+      const { data: users, error } = await supabase
+        .from('users')
+        .select('id, name, email, password_hash, role, extra, created_at')
+        .eq('email', email);
+
+      if (error) {
+        logger.error('py/signin: supabase lookup error', { message: error.message || error });
+        throw error;
+      }
+
+      if (!users || users.length === 0) {
+        logger.info('py/signin: user not found in Supabase');
+        if (!devRoutesEnabled) {
+          logger.info('py/signin: dev routes disabled, returning unregistered');
+          return res.status(400).json({ detail: "Unregistered email" });
+        }
+        logger.info('py/signin: attempting local Postgres fallback (dev)');
+        try {
+          const r = await pool.query('SELECT id,name,email,password_hash,role,extra,created_at FROM users WHERE LOWER(email)=LOWER($1) LIMIT 1', [email]);
+          if (!r.rows.length) {
+            logger.info('py/signin: user not found in Supabase or Postgres');
+            return res.status(400).json({ detail: "Unregistered email" });
+          }
+          user = r.rows[0];
+          logger.info(`py/signin: found user in Postgres id=${user.id} role=${user.role}`);
+        } catch (pgErr) {
+          logger.error('py/signin: local Postgres lookup failed', pgErr?.message || pgErr);
+          return res.status(400).json({ detail: "Unregistered email" });
+        }
+      } else {
+        user = users[0];
+        logger.info(`py/signin: supabase returned user id=${user.id} role=${user.role}`);
+      }
     }
-
-    const user = users[0];
-
-    // DEBUG LOGGING
-
 
     // 2. Validate Password
     const hash = user.password_hash;
@@ -1525,10 +1602,12 @@ app.post('/api/py/signin', async (req, res) => {
       if (hash && hash !== 'supabase_auth') {
         // Local bcrypt-stored password
         match = await bcrypt.compare(password, hash);
+        logger.info(`py/signin: bcrypt compare result for user id=${user.id} match=${match}`);
       } else {
         // Fallback: user was created via Supabase auth — verify with Supabase
         try {
-          const { data: signInData, error: signInErr } = await supabase.auth.signInWithPassword({ email, password });
+          const { data: signInData, error: signInErr } = await (supabase ? supabase.auth.signInWithPassword({ email, password }) : { data: null, error: 'Supabase not configured' });
+          logger.info('py/signin: supabase.auth.signInWithPassword result', { error: signInErr?.message || signInErr, hasUser: !!(signInData && signInData.user) });
           if (!signInErr && signInData && signInData.user) {
             match = true;
           }
@@ -1628,6 +1707,8 @@ app.post('/api/py/signin', async (req, res) => {
     };
 
     res.cookie('accessToken', sessToken, cookieOpts);
+
+
     res.cookie('refreshToken', refreshToken, refreshCookieOpts);
 
     // 7. Fetch Dashboard State
@@ -1655,6 +1736,40 @@ app.post('/api/py/signin', async (req, res) => {
     res.status(500).json({ detail: `Internal Server Error: ${e.message}` });
   }
 });
+
+// Dev: Verify user existence across Supabase and Postgres
+if (devRoutesEnabled) {
+  app.post('/api/dev/verify-user', async (req, res) => {
+    const { email, role } = req.body;
+    if (!email) return res.status(400).json({ error: 'email required' });
+
+    const out = { email, role, checks: {} };
+    try {
+      if (supabase) {
+        const { data, error } = await supabase.from('users').select('*').eq('email', email).maybeSingle();
+        out.checks.supabase_user = { found: !!data, data: data || null, error: error ? String(error) : null };
+        if (data && role) {
+          out.checks.supabase_role = { matches: data.role === role, storedRole: data.role };
+        }
+      } else {
+        out.checks.supabase_user = { found: false, error: 'Supabase not configured' };
+      }
+
+      try {
+        const r = await pool.query('SELECT * FROM users WHERE LOWER(email)=LOWER($1)', [email]);
+        out.checks.postgres_user = { found: r.rowCount > 0, data: r.rows[0] || null };
+        if (r.rowCount > 0 && role) out.checks.postgres_role = { matches: r.rows[0].role === role, storedRole: r.rows[0].role };
+      } catch (pgErr) {
+        out.checks.postgres_user = { found: false, error: String(pgErr) };
+      }
+
+      res.json(out);
+    } catch (e) {
+      logger.error('dev/verify-user error', e);
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+}
 
 // bulk retry
 app.post('/api/queue-signups/bulk-retry', async (req, res, next) => {
