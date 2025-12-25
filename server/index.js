@@ -627,35 +627,47 @@ if (devRoutesEnabled) {
     res.set('Content-Type', 'application/javascript');
     res.set('Cache-Control', 'no-store');
     res.send(`(function(){
-      async function devDelete(type,id,btn){
+      window.devDelete = async function(btn){
         try{
-          console.log('devDelete called', { type, id });
+          var type = btn.dataset.type;
+          var id = btn.dataset.id;
+          console.log('devDelete calling', { type, id });
+          
           const ok = confirm('Delete '+type+' ID '+id+'? This is irreversible. Click OK to continue.');
           if(!ok) return;
+          
           const token = prompt('Type DELETE to confirm', '');
           if(token !== 'DELETE'){ alert('Confirmation failed'); return; }
-          if(btn){ btn.disabled = true; btn.dataset.orig = btn.innerText; btn.innerText = 'Deleting...'; }
+          
+          btn.disabled = true; 
+          btn.dataset.orig = btn.innerText; 
+          btn.innerText = 'Deleting...';
+          
           const r = await fetch('/dev-view/delete', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetType: type, id: id, confirm: 'DELETE' }) });
           let j = {};
           try{ j = await r.json(); } catch(e){ console.warn('Response not JSON', e); }
-          console.log('devDelete response', r.status, j);
+          
           if(!r.ok) return alert('Delete failed: ' + (j.error || j.details || JSON.stringify(j) || r.statusText));
-          alert('Deleted: ' + JSON.stringify(j));
+          alert('Deleted successfully');
           window.location.reload();
-        }catch(e){ console.error('devDelete network error', e); alert('Request failed: ' + e.message); }
+        }catch(e){ console.error('devDelete error', e); alert('Request failed: ' + e.message); }
         finally{ if(btn){ btn.disabled = false; btn.innerText = btn.dataset.orig || 'Delete'; } }
       }
-      document.addEventListener('click', function(e){
-        var btn = e.target && e.target.closest && e.target.closest('.delete-btn');
-        if(!btn) return;
-        var t = btn.dataset.type;
-        var id = btn.dataset.id;
-        devDelete(t,id,btn);
-      });
-      // helper to fetch JSON users for debugging
-      window.devFetchUsers = async function(){ try{ const r = await fetch('/dev-view/users.json', {credentials:'same-origin'}); const j = await r.json(); console.log('dev users', j); return j; } catch(e){ console.error('devFetchUsers failed', e); return null; } }
+
+      // Add onclick handlers to all delete buttons on load
+      function bindButtons() {
+        var btns = document.querySelectorAll('.delete-btn');
+        btns.forEach(function(btn){
+           btn.onclick = function() { window.devDelete(this); };
+        });
+      }
+      
+      if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bindButtons);
+      else bindButtons();
+
       window.devProcessSupabaseQueue = async function(){ try{ const r = await fetch('/dev-view/process-supabase-queue', { method: 'POST', credentials: 'same-origin' }); const j = await r.json(); console.log('process supa queue', j); alert('Processed: ' + (j.processed || 0)); window.location.reload(); } catch(e){ console.error('devProcessSupabaseQueue failed', e); alert('Error: ' + e.message); } }
-      document.addEventListener('click', function(e){ if(e.target && e.target.id === 'process-supa-queue'){ if(confirm('Run supabase sync queue now?')) window.devProcessSupabaseQueue(); } });
+      var qBtn = document.getElementById('process-supa-queue');
+      if(qBtn) qBtn.onclick = function() { if(confirm('Run supabase sync queue now?')) window.devProcessSupabaseQueue(); };
     })();`);
   });
 

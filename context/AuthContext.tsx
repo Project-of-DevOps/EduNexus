@@ -308,89 +308,104 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
-  const signUp = async (name: string, email: string, password: string, role: UserRole, extra: Record<string, any> = {}): Promise<{ success: boolean; error?: string }> => {
-    // Enforce Gmail-only addresses for signups
-    const emailLowerCheck = (email || '').toLowerCase();
-    if (!/@gmail\.com$/.test(emailLowerCheck)) return { success: false, error: 'Only Gmail addresses are allowed' };
-    // Prevent duplicate emails _for the same role and same org type_ (management users may share email across types)
-    // Removed local check to trust backend validation
-
-    // const emailLower = email.toLowerCase();
-    // const exists = users.find(...)
-    // if (exists) return { success: false, error: 'User already exists locally' };
-
-    const newId = `${role}_${Date.now()}`;
-    const base: any = { id: newId, name, email, role, password, ...extra };
-
-    // store consistent orgType on created users when provided
-    if (extra && extra.orgType) base.orgType = extra.orgType;
-
-    // role specific defaults
-    if (role === UserRole.Student) {
-      base.parentId = extra.parentId || '';
-      base.classId = extra.classId || '';
-      base.instituteId = extra.instituteName || extra.instituteId || '';
-    } else if (role === UserRole.Teacher) {
-      base.department = extra.department || '';
-      base.instituteId = extra.instituteName || extra.instituteId || '';
-      base.reportingToId = extra.reportingToId || '';
-    } else if (role === UserRole.Management) {
-      base.instituteId = extra.instituteName || extra.instituteId || '';
-      base.type = extra.type || 'institute';
-    } else if (role === UserRole.Parent) {
-      base.childIds = extra.childIds || [];
-      base.instituteId = extra.instituteName || extra.instituteId || '';
-    }
-
-    // Persist users to the python server when available (triggers welcome email)
-    const apiUrl = getApiUrl();
+  const signUp = async (name: string, email: string, password: string, role: UserRole, extra: Record<string, any> = {}): Promise<{ success: boolean; error?: string; user?: any; pendingApproval?: boolean; message?: string; note?: string }> => {
     try {
-      const resp = await fetch(`${apiUrl}/api/py/signup`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email, password, role, extra }) // Python expects { name, email, password, role } mostly
-      });
-      if (resp.ok) {
-        const json = await resp.json();
-        if (json && json.success && json.user) {
-          // Sync with Supabase Auth handled by Python service now
+      // STRICT FLOW: Use new Node.js endpoints for specific roles
+      let endpoint = '/api/py/signup'; // Default / fallback
+      let payload: any = {
+        email,
+        password,
+        name,
+        role,
+        extra: extra || {}
+      };
 
-          // add a local copy and activate session
-          const u = { ...json.user };
-          addUser({ ...u, password: undefined } as any);
-          setUser(u as LoggedInUser);
+      if (role === UserRole.Teacher) {
+        endpoint = '/api/auth-strict/signup/teacher-request';
+        // Map fields for Teacher Request
+        payload = {
+          username: email,
+          password: password,
+          org_code: extra.uniqueId || extra.code,
+          institute_name: extra.instituteName || extra.schoolName || ''
+        };
+      } else if (role === UserRole.Student) {
+        endpoint = '/api/auth-strict/signup/student';
+        // Map fields for Student
+        payload = {
+          username: email,
+          password: password,
+          org_code: extra.uniqueId || extra.code,
+          class_id: extra.classId
+        };
+      } else if (role === UserRole.Parent) {
+        endpoint = '/api/auth-strict/signup/parent';
+        // Map fields for Parent
+        payload = {
+          username: email,
+          password: password,
+          parent_email: email,
+          student_email: extra.studentEmail
+        };
+      } else if (role === UserRole.Management) {
+        endpoint = '/api/auth-strict/signup/management';
+        payload = {
+          username: email,
+          password: password,
+          institute_name: extra.instituteName,
+          title: extra.title
+        };
+      }
+
+      const apiUrl = getApiUrl();
+      const res = await fetch(`${apiUrl}${endpoint}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify(payload),
+      });
+
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success) {
+          // If the backend returns a user object, use it. 
+          if (json.user) {
+            const newUser = { ...json.user, password_hash: undefined };
+            // Auto-login only if not pending approval
+            if (!json.pendingApproval) {
+              setUser(newUser);
+            }
+            return { success: true, user: newUser, pendingApproval: json.pendingApproval, message: json.message };
+          }
           return { success: true };
+        } else {
+          return { success: false, error: json.error || json.detail || 'Signup failed' };
         }
       } else {
-        const json = await resp.json();
-        // If server returns error, do NOT fallback to local. Return the error.
-        return { success: false, error: json.detail || json.error || 'Signup failed' };
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || err.detail || 'Signup failed');
       }
-    } catch (e) {
-      // logging — API unreachable
-      console.warn('Python signup API failed', e);
-    }
+    } catch (error: any) {
+      console.error('Signup error:', error);
 
-    // if we reach here it means API didn't return success
-    // For Management, queue for later sync
-    if (role === UserRole.Management) {
-      try {
-        addPendingManagementSignup({ name, email, password, extra });
-        const pendingLocal = { ...base, pendingSync: true };
-        addUser(pendingLocal as any);
-        setUser(pendingLocal as LoggedInUser);
-        return { success: true };
-      } catch (err) {
-        // fall back to local-only storage if queueing fails
+      // OFFLINE / DEV FALLBACK
+      // If network error (fetch failed), queue it locally so user can "dev login"
+      if (role === UserRole.Management) {
+        const newId = `${role}_${Date.now()}`;
+        const pendingSignup = { name, email, password, role, extra, date: new Date().toISOString() };
+        const currentPending = JSON.parse(localStorage.getItem('pendingManagementSignups') || '[]');
+        currentPending.push(pendingSignup);
+        localStorage.setItem('pendingManagementSignups', JSON.stringify(currentPending));
+
+        // Auto-login locally
+        setUser({ id: `local_${Date.now()}`, name, email, role, extra } as any);
+        return { success: true, note: 'Saved offline (Dev Mode)' };
       }
+
+      return { success: false, error: error.message || 'Network error' };
     }
-
-
-    // normalize email to lowercase when storing to avoid case mismatch on login
-    const withNormalizedEmail = { ...base, email: (base.email || '').toLowerCase() };
-    addUser(withNormalizedEmail as any);
-    setUser(withNormalizedEmail as LoggedInUser);
-    return { success: true };
   };
 
   const logout = () => {

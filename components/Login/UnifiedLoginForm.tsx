@@ -121,6 +121,8 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
     const [rollNumber, setRollNumber] = useState('');
     const [teachingAssignments, setTeachingAssignments] = useState<TeachingAssignment[]>([]);
     const [classInChargeId, setClassInChargeId] = useState('');
+    const [classList, setClassList] = useState<any[]>([]);
+    const [selectedClassId, setSelectedClassId] = useState('');
 
     const [error, setError] = useState('');
     const [successMessage, setSuccessMessage] = useState('');
@@ -254,6 +256,27 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+
+    // Strict Flow: Fetch Classes for Student
+    useEffect(() => {
+        const fetchClasses = async () => {
+            if (activeRole === UserRole.Student && uniqueId.length >= 3) {
+                try {
+                    const apiUrl = getApiUrl();
+                    // Use loose strict endpoint or verify generic fetch
+                    const res = await fetch(`${apiUrl}/api/auth-strict/public/classes?org_code=${uniqueId}`);
+                    if (res.ok) {
+                        const json = await res.json();
+                        if (json.success && json.classes) setClassList(json.classes);
+                    }
+                } catch (e) { console.warn('Failed to fetch classes', e); }
+            } else {
+                setClassList([]);
+            }
+        };
+        const timeout = setTimeout(fetchClasses, 600);
+        return () => clearTimeout(timeout);
+    }, [uniqueId, activeRole]);
 
     const isManagementRole = (role: string) => managementRoles.includes(role);
     const isTeachingRole = (role: string) => teachingRoles.includes(role);
@@ -674,7 +697,11 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                 } else if (activeRole === UserRole.Management) {
                     extras.title = managementTitle;
                     extras.instituteName = instituteName;
-                } else if (activeRole === UserRole.Parent || activeRole === UserRole.Student) {
+                } else if (activeRole === UserRole.Parent) {
+                    extras.studentEmail = studentEmail;
+                    extras.rollNumber = rollNumber; // Keep for legacy
+                } else if (activeRole === UserRole.Student) {
+                    extras.classId = selectedClassId;
                     extras.rollNumber = rollNumber;
                 }
 
@@ -1262,24 +1289,42 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                                         )}
 
                                         {!isLogin && activeRole === UserRole.Student && (
-                                            <Input
-                                                id="rollNumber"
-                                                label="Roll Number"
-                                                value={rollNumber}
-                                                onChange={(e) => setRollNumber(e.target.value)}
-                                                placeholder="Enter your Class Roll Number"
-                                                required
-                                                className="text-black"
-                                            />
+                                            <>
+                                                {classList.length > 0 && (
+                                                    <div className="space-y-2">
+                                                        <label className="block text-sm font-medium text-gray-700">Select Class</label>
+                                                        <select
+                                                            className="w-full bg-white border border-gray-300 rounded-md p-2 text-black focus:ring-blue-500 focus:border-blue-500"
+                                                            value={selectedClassId}
+                                                            onChange={e => setSelectedClassId(e.target.value)}
+                                                            required
+                                                        >
+                                                            <option value="">-- Select Class --</option>
+                                                            {classList.map((c: any) => (
+                                                                <option key={c.id} value={c.id}>{c.name} {c.section ? `(${c.section})` : ''}</option>
+                                                            ))}
+                                                        </select>
+                                                    </div>
+                                                )}
+                                                <Input
+                                                    id="rollNumber"
+                                                    label="Roll Number"
+                                                    value={rollNumber}
+                                                    onChange={(e) => setRollNumber(e.target.value)}
+                                                    placeholder="Enter your Class Roll Number"
+                                                    required
+                                                    className="text-black"
+                                                />
+                                            </>
                                         )}
 
                                         {!isLogin && activeRole === UserRole.Parent && (
                                             <Input
-                                                id="studentRollNumber"
-                                                label="Student Roll Number"
-                                                value={rollNumber}
-                                                onChange={(e) => setRollNumber(e.target.value)}
-                                                placeholder="Enter your child's Roll Number"
+                                                id="studentEmail"
+                                                label="Student's Email Address"
+                                                value={studentEmail}
+                                                onChange={(e) => setStudentEmail(e.target.value)}
+                                                placeholder="Enter your child's Registered Email"
                                                 required
                                                 className="text-black"
                                             />

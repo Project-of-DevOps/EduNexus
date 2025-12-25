@@ -239,4 +239,58 @@ router.get('/parent/students', async (req, res) => {
     }
 });
 
+// 6. Management Signup (Strict Flow)
+router.post('/signup/management', async (req, res) => {
+    const { username, password, institute_name, title } = req.body;
+
+    try {
+        const email = username.includes('@') ? username : `${username}@management.edu`;
+
+        // 1. Create Auth User
+        let userId;
+        try {
+            userId = await createAuthUser(email, password, { name: username, role: 'management' });
+        } catch (e) {
+            if (e.message.includes('already registered')) return res.status(409).json({ error: 'Account already exists.' });
+            throw e;
+        }
+
+        // 2. Insert into USERS
+        try {
+            await db.pool.query(
+                `INSERT INTO users (id, email, name, role, username, password_hash, supabase_user_id) 
+                 VALUES ($1, $2, $3, 'management', $4, 'supabase_managed', $1)`,
+                [userId, email, username, username]
+            );
+        } catch (dbErr) {
+            if (dbErr.code === '23505') return res.status(409).json({ error: 'Account already exists.' });
+            throw dbErr;
+        }
+
+        // 3. Create Organization
+        const prefix = institute_name.substring(0, 3).toUpperCase();
+        const random = Math.floor(1000 + Math.random() * 9000);
+        const code = `${prefix}-${random}`;
+        const type = 'school'; // Default for now, or pass from frontend if 'institute' vs 'school' matters
+
+        const orgRes = await db.pool.query(
+            `INSERT INTO organizations (name, code, type, owner_id) VALUES ($1, $2, $3, $4) RETURNING *`,
+            [institute_name, code, type, userId]
+        );
+        const org = orgRes.rows[0];
+
+        // 4. Link User to Org
+        await db.pool.query(
+            `INSERT INTO org_members (user_id, org_id, status, assigned_role_title) VALUES ($1, $2, 'approved', $3)`,
+            [userId, org.id, title]
+        );
+
+        res.json({ success: true, userId, organization: org });
+
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 module.exports = router;
