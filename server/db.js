@@ -33,6 +33,10 @@ const pool = createPool();
 if (pool && typeof pool.on === 'function') {
     pool.on('error', (err) => {
         console.error('Unexpected DB client error', err?.message || err);
+        // Provide actionable guidance for auth errors
+        if (err && err.code === '28P01') {
+            console.error('Database authentication failed. Verify DATABASE_URL (user/password) and that the Postgres server is reachable. If using Render, set DATABASE_URL via the dashboard; locally, update server/.env');
+        }
         // Use process.stderr to ensure visibility in hosting environments
         try { process.stderr.write(`DB client error: ${String(err?.message || err)}\n`); } catch (e) { /* ignore */ }
     });

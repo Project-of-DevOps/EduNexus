@@ -303,7 +303,7 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
             if (isLogin) {
                 if (res.ok && !json.exists) {
                     setLoading(false);
-                    setPopupError('User not registered , Consider registering before sign-in');
+                    setPopupError('Unregister Email-ID Consider Registering');
                     setTimeout(() => setPopupError(null), 4000);
                     return;
                 }
@@ -311,7 +311,7 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                 // Signup: Check if ALREADY exists
                 if (res.ok && json.exists) {
                     setLoading(false);
-                    setEmailError('Email-ID already exist');
+                    setEmailError('Email already exists');
                     setTimeout(() => setEmailError(''), 2500);
                     return;
                 }
@@ -320,8 +320,13 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
             console.warn('Email check failed', e);
             if (isLogin) {
                 setLoading(false);
-                setPopupError(`Unable to verify email: ${e}`);
-                setTimeout(() => setPopupError(null), 4000);
+                if (!navigator.onLine) {
+                    setPopupError('Unable to verify email: No network connection');
+                } else {
+                    setPopupError('Unable to verify email: Network or backend error (check API URL / CORS).');
+                }
+                // Keep original error in console for debugging; show user-friendly message
+                setTimeout(() => setPopupError(null), 6000);
                 return;
             }
         }
@@ -671,6 +676,23 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                     extras.instituteName = instituteName;
                 } else if (activeRole === UserRole.Parent || activeRole === UserRole.Student) {
                     extras.rollNumber = rollNumber;
+                }
+
+                // Ensure email does not already exist (defensive check if user skipped the email pre-check)
+                try {
+                    const apiUrl = getApiUrl();
+                    const checkRes = await fetch(`${apiUrl}/api/py/check-email`, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email })
+                    });
+                    const checkJson = await checkRes.json().catch(() => ({}));
+                    if (checkRes.ok && checkJson.exists) {
+                        setError('Email already exists');
+                        setLoading(false);
+                        return;
+                    }
+                } catch (e) {
+                    // network failure — allow signUp to proceed and let server-side handle duplicates
+                    console.warn('Email existence check failed; proceeding to signup', e);
                 }
 
                 const result = await signUp(name, email, password, activeRole as UserRole, extras);
@@ -1480,7 +1502,7 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
                                 </div>
                                 <div className="ml-4">
                                     <h3 className="text-lg font-bold text-gray-900">
-                                        {popupError && (popupError.includes('not registered') || popupError.includes('not found')) ? 'Account Not Found' : 'Connection Error'}
+                                        {popupError && (popupError.includes('Unregister') || popupError.includes('not registered') || popupError.includes('not found')) ? 'Account Not Found' : 'Connection Error'}
                                     </h3>
                                     <div className="mt-1">
                                         <p className="text-sm text-gray-500">{popupError}</p>

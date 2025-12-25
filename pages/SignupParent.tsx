@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
@@ -10,9 +9,9 @@ import { getApiUrl } from '../utils/config';
 const SignupParent: React.FC = () => {
     const navigate = useNavigate();
     const [formData, setFormData] = useState({
-        username: '',
+        name: '',
         password: '',
-        parent_email: '',
+        email: '',
         student_email: ''
     });
     const [error, setError] = useState('');
@@ -31,11 +30,39 @@ const SignupParent: React.FC = () => {
 
         try {
             const apiUrl = getApiUrl();
-            await axios.post(`${apiUrl}/api/auth-strict/signup/parent`, formData);
+
+            // Pre-check email existence
+            try {
+                const checkRes = await axios.post(`${apiUrl}/api/py/check-email`, { email: formData.email });
+                if (checkRes.data && checkRes.data.exists) {
+                    setError('Email already exists');
+                    setLoading(false);
+                    return;
+                }
+            } catch (checkErr) {
+                console.warn('Email check failed silent', checkErr);
+            }
+
+            const payload = {
+                name: formData.name,
+                email: formData.email,
+                password: formData.password,
+                role: 'Parent',
+                extra: {
+                    studentEmail: formData.student_email
+                }
+            };
+
+            await axios.post(`${apiUrl}/api/signup`, payload);
             setSuccess('Parent account created and linked! Redirecting...');
             setTimeout(() => navigate('/login'), 2000);
         } catch (err: any) {
-            setError(err.response?.data?.error || 'Signup failed. Ensure student email is correct.');
+            const msg = err.response?.data?.detail || err.response?.data?.error || 'Signup failed. Ensure student email is correct.';
+            if (msg.includes('already been used') || msg.includes('already exist')) {
+                setError('Email -ID alredy exist');
+            } else {
+                setError(msg);
+            }
         } finally {
             setLoading(false);
         }
@@ -52,17 +79,17 @@ const SignupParent: React.FC = () => {
 
                 <form onSubmit={handleSubmit} className="space-y-4">
                     <Input
-                        name="parent_email"
+                        name="email"
                         label="Parent Email-ID"
                         type="email"
-                        value={formData.parent_email}
+                        value={formData.email}
                         onChange={handleChange}
                         required
                     />
                     <Input
-                        name="username"
-                        label="Username"
-                        value={formData.username}
+                        name="name"
+                        label="Full Name"
+                        value={formData.name}
                         onChange={handleChange}
                         required
                     />

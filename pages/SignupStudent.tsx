@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
@@ -10,8 +9,9 @@ import { getApiUrl } from '../utils/config';
 const SignupStudent: React.FC = () => {
     const navigate = useNavigate();
     const [formData, setFormData] = useState({
-        username: '',
+        name: '',
         password: '',
+        email: '',
         org_code: '',
         class_id: ''
     });
@@ -32,7 +32,7 @@ const SignupStudent: React.FC = () => {
         setError('');
         try {
             const apiUrl = getApiUrl();
-            const res = await axios.get(`${apiUrl}/api/auth-strict/public/classes?org_code=${formData.org_code}`);
+            const res = await axios.get(`${apiUrl}/api/public/classes?org_code=${formData.org_code}`);
             setClasses(res.data);
             if (res.data.length === 0) setError('No classes found for this code.');
         } catch (err: any) {
@@ -51,11 +51,41 @@ const SignupStudent: React.FC = () => {
 
         try {
             const apiUrl = getApiUrl();
-            await axios.post(`${apiUrl}/api/auth-strict/signup/student`, formData);
+
+            // Pre-check email existence
+            try {
+                const checkRes = await axios.post(`${apiUrl}/api/py/check-email`, { email: formData.email });
+                if (checkRes.data && checkRes.data.exists) {
+                    setError('Email already exists');
+                    setLoading(false);
+                    return;
+                }
+            } catch (checkErr) {
+                // Ignore check error and proceed to let actual signup handle it if backend fails
+                console.warn('Email check failed silent', checkErr);
+            }
+
+            const payload = {
+                name: formData.name,
+                email: formData.email,
+                password: formData.password,
+                role: 'Student',
+                extra: {
+                    uniqueId: formData.org_code,
+                    classId: formData.class_id
+                }
+            };
+
+            await axios.post(`${apiUrl}/api/signup`, payload);
             setSuccess('Signup successful! Redirecting to login...');
             setTimeout(() => navigate('/login'), 2000);
         } catch (err: any) {
-            setError(err.response?.data?.error || 'Signup failed');
+            const msg = err.response?.data?.detail || err.response?.data?.error || 'Signup failed';
+            if (msg.includes('already been used') || msg.includes('already exist')) {
+                setError('Email -ID alredy exist');
+            } else {
+                setError(msg);
+            }
         } finally {
             setLoading(false);
         }
@@ -102,9 +132,17 @@ const SignupStudent: React.FC = () => {
                     </div>
 
                     <Input
-                        name="username"
-                        label="Username"
-                        value={formData.username}
+                        name="name"
+                        label="Full Name"
+                        value={formData.name}
+                        onChange={handleChange}
+                        required
+                    />
+                    <Input
+                        name="email"
+                        label="Email Address"
+                        type="email"
+                        value={formData.email}
                         onChange={handleChange}
                         required
                     />

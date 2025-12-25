@@ -21,7 +21,19 @@ export const getPythonApiUrl = (): string => {
 // constructs a URL using the current window.location.hostname and port 4000.
 export const getApiUrl = (): string => {
     if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL.replace(/\/$/, '');
+
+    // Avoid mixed-content issues: when the app is hosted on a non-localhost origin
+    // prefer the current page origin (same host) rather than forcing :4000 which
+    // is often unavailable in production builds (Render, Vercel etc.). For local
+    // development we keep the default of port 4000 for the server.
     const protocol = window.location.protocol || 'http:';
     const hostname = window.location.hostname;
+
+    const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0';
+    if (!isLocalhost) {
+        // Use same origin so we don't cause HTTPS -> HTTP mixed content failures
+        return `${protocol}//${hostname}`;
+    }
+
     return `${protocol}//${hostname}:4000`;
 };

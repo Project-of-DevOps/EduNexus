@@ -1,0 +1,42 @@
+[
+  {
+    "id": "1a2ae98d-b472-4b42-b7d6-6b95354c4069",
+    "email": "homer@edu.local",
+    "role": "Parent"
+  },
+  {
+    "id": "3aa24f84-a762-4006-8017-bc31407ebd35",
+    "email": "edna@edu.local",
+    "role": "Teacher"
+  },
+  {
+    "id": "3ef9d71f-68a9-4e2b-b1d4-e817500486f1",
+    "email": "largo@edu.local",
+    "role": "Teacher"
+  },
+  {
+    "id": "479574af-4e7a-40a5-8968-4267b23ea5c0",
+    "email": "hoover@edu.local",
+    "role": "Teacher"
+  },
+  {
+    "id": "c4d281a9-2b00-4d30-a107-b20cb358cf8d",
+    "email": "lisa@edu.local",
+    "role": "Student"
+  },
+  {
+    "id": "c6a40577-8a39-43e9-9118-01ff1d61b6b9",
+    "email": "skinner@edu.local",
+    "role": "Management"
+  },
+  {
+    "id": "fb3dcfda-81d6-44da-abc6-c45691cd50f3",
+    "email": "bart@edu.local",
+    "role": "Student"
+  },
+  {
+    "id": "feb8f979-7172-43b5-a2e2-9b153dff9726",
+    "email": "willie@edu.local",
+    "role": "Teacher"
+  }
+]

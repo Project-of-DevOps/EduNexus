@@ -16,6 +16,7 @@
     "seed:dev": "node server/scripts/seed_dev_data.js",
     "test": "vitest",
     "test:ui": "vitest --ui",
+    "test:dev-view": "node scripts/dev_view_e2e.cjs",
     "build": "vite build",
     "preview": "vite preview"
   },
@@ -24,6 +25,7 @@
     "@supabase/supabase-js": "^2.86.2",
     "axios": "^1.13.2",
     "docx": "^8.3.1",
+    "dotenv": "^17.2.3",
     "imap-simple": "^6.0.0",
     "jspdf": "^2.5.1",
     "nodemailer": "^6.9.3",

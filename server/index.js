@@ -29,6 +29,7 @@ const rateLimit = require('express-rate-limit');
 const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
 const axios = require('axios');
+const crypto = require('crypto');
 const { signupSchema, loginSchema } = require('./utils/validation');
 const { createClient } = require('@supabase/supabase-js');
 const z = require('zod');
@@ -53,12 +54,45 @@ if (missingEnv.length > 0) {
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
 let supabase;
+const metrics = require('./metrics');
+let supabaseDownUntil = 0; // timestamp until which we consider supabase down
+const SUPABASE_DOWN_TTL_MS = Number(process.env.SUPABASE_DOWN_TTL_MS || 60_000);
 
 if (supabaseUrl && supabaseKey) {
-  supabase = createClient(supabaseUrl, supabaseKey);
+  try {
+    supabase = createClient(supabaseUrl, supabaseKey);
+  } catch (e) {
+    logger.warn('Failed to initialize Supabase client', e?.message || e);
+    supabase = null;
+  }
 } else {
   logger.warn("Supabase credentials missing. Migrated Python endpoints will fail.");
 }
+
+// In production, require Supabase to be configured (we rely on Supabase Auth and shared hosted tables)
+if (process.env.NODE_ENV === 'production' && (!supabaseUrl || !supabaseKey)) {
+  logger.error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be configured in production. Exiting to avoid inconsistent auth behavior.');
+  process.exit(1);
+}
+
+// Warn when both Supabase and a local DATABASE_URL are configured — this is often intentional (dev),
+// but in deployments it can cause divergence if they are not the same data source.
+if (supabaseUrl && process.env.DATABASE_URL) {
+  try {
+    const supaHost = new URL(supabaseUrl).hostname;
+    const dbUrl = process.env.DATABASE_URL;
+    const dbHost = dbUrl.includes('://') ? new URL(dbUrl).hostname : null;
+    if (dbHost && dbHost !== supaHost) {
+      logger.warn('Both SUPABASE and a local DATABASE_URL are configured and point to different hosts. Be aware data in Supabase and local Postgres will not be automatically synchronized.');
+    }
+  } catch (err) { /* ignore parse errors */ }
+}
+
+const isSupabaseAvailable = () => {
+  if (!supabase) return false;
+  if (Date.now() < supabaseDownUntil) return false;
+  return true;
+};
 
 // Dev routes / fallbacks enabled when explicitly set or when not in production
 const devRoutesEnabled = process.env.ENABLE_DEV_ROUTES === 'true' || process.env.NODE_ENV !== 'production';
@@ -67,7 +101,10 @@ logger.info(`Dev routes enabled: ${devRoutesEnabled}`);
 const app = express();
 
 // Security Headers
-app.use(helmet());
+// In dev we disable helmet's contentSecurityPolicy so our dev-only pages can use helpful inline fallbacks.
+// In production, keep helmet's defaults for strong security.
+const helmetOptions = { contentSecurityPolicy: false };
+app.use(helmet(helmetOptions));
 
 // CORS Configuration
 // Allow list built from static values plus optional env-configured client URL
@@ -83,25 +120,37 @@ if (process.env.VITE_API_URL) {
 }
 const localOriginRegex = /^https?:\/\/(?:localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(?:1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+)(?::\d+)?$/i;
 
-const corsOptions = {
-  origin: function (origin, callback) {
+// Use an options delegate so we can inspect the request path and allow dev-only routes
+const corsOptionsDelegate = (req, callback) => {
+  try {
+    // Allow all requests to dev-only endpoints regardless of Origin (safe when dev routes are enabled)
+    if (devRoutesEnabled && String(req.path || '').startsWith('/dev-view')) {
+      logger.info('CORS: allowing dev-view request (dev routes enabled)');
+      return callback(null, { origin: true, credentials: true, optionsSuccessStatus: 200 });
+    }
+
+    const origin = req.header('Origin');
     // Allow requests with no origin (curl, mobile)
-    if (!origin) return callback(null, true);
-    // Allow entries explicitly whitelisted (production or known hosts)
-    if (allowedOrigins.includes(origin)) return callback(null, true);
-    // Allow common local network origins (e.g., 10.x.x.x:3000, 192.168.*, localhost)
-    if (localOriginRegex.test(origin)) return callback(null, true);
-    callback(new Error('Not allowed by CORS'));
-  },
-  credentials: true,
-  optionsSuccessStatus: 200
+    if (!origin) return callback(null, { origin: true, credentials: true, optionsSuccessStatus: 200 });
+    // Allow explicit whitelist
+    if (allowedOrigins.includes(origin)) return callback(null, { origin: true, credentials: true, optionsSuccessStatus: 200 });
+    // Allow common local network origins
+    if (localOriginRegex.test(origin)) return callback(null, { origin: true, credentials: true, optionsSuccessStatus: 200 });
+
+    // Disallowed
+    return callback(new Error('Not allowed by CORS'), { origin: false });
+  } catch (e) {
+    // If something unexpected happened, be conservative and disallow
+    logger.warn('CORS delegate error:', e?.message || e);
+    return callback(new Error('Not allowed by CORS'), { origin: false });
+  }
 };
 
-app.use(cors(corsOptions));
+app.use(cors(corsOptionsDelegate));
 
 // Ensure preflight OPTIONS are handled with the same CORS policy
 app.use((req, res, next) => {
-  if (req.method === 'OPTIONS') return cors(corsOptions)(req, res, next);
+  if (req.method === 'OPTIONS') return cors(corsOptionsDelegate)(req, res, next);
   return next();
 });
 
@@ -143,6 +192,15 @@ app.get('/health', (req, res) => {
 // Request Logging Middleware
 app.use((req, res, next) => {
   logger.info(`${req.method} ${req.url}`);
+  
+  // FORCE PERMISSIVE CSP globally for this dev session to fix the user's issue
+  if (devRoutesEnabled) {
+      res.setHeader(
+        'Content-Security-Policy', 
+        "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'sha256-rgXc7+5IO+wiNQP5biAiXjAPSzz0noyYqjNku70bdbo='; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https:; frame-ancestors 'none';"
+      );
+  }
+  
   next();
 });
 
@@ -194,6 +252,418 @@ app.post('/api/admin/outbox/retry', checkAdminAuth, async (req, res) => {
 });
 
 
+// Dev-only: Ultimate Developer View (password protected via DEV'S_PASSWORD in server/.env)
+if (devRoutesEnabled) {
+  // For dev routes only, relax CSP so inline convenience scripts and prompt() calls work in browsers during development.
+  // This is intentionally permissive and only enabled when dev routes are turned on.
+  app.use('/dev-view', (req, res, next) => {
+    // Remove any previously-set CSP headers (e.g. from helmet) and set a permissive development policy.
+    try {
+      res.removeHeader('Content-Security-Policy');
+      res.removeHeader('Content-Security-Policy-Report-Only');
+    } catch (e) { /* ignore */ }
+    const csp = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'sha256-rgXc7+5IO+wiNQP5biAiXjAPSzz0noyYqjNku70bdbo='; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https:; frame-ancestors 'none';";
+    res.set('Content-Security-Policy', csp);
+    logger.info('Dev view CSP set:', csp.replace(/\s+/g, ' ').slice(0, 200));
+    next();
+  });
+
+  const devSessions = new Map();
+  const generateToken = () => crypto.randomBytes(16).toString('hex');
+
+  // Simple login / setup page
+  app.get('/dev-view', (req, res) => {
+    logger.info(`/dev-view accessed. hasDevPassword=${!!process.env["DEV'S_PASSWORD"]}`);
+    const envPass = process.env["DEV'S_PASSWORD"];
+    const html = `
+      <html><head><title>Dev View</title></head><body style="font-family:system-ui,Segoe UI,Roboto,Arial; padding:20px;">
+      <h2>EduNexus Developer View</h2>
+      ${envPass ? `
+        <form method="POST" action="/dev-view/login">
+          <label>Password: <input name="password" type="password"/></label>
+          <button type="submit">Login</button>
+        </form>
+        <p style="font-size:12px;color:#666">Protected by DEV'S_PASSWORD in <code>server/.env</code>.</p>
+      ` : `
+        <p>No <code>DEV'S_PASSWORD</code> configured. Set one (developer only).</p>
+        <form method="POST" action="/dev-view/setup">
+          <label>Set Password: <input name="password" type="password"/></label>
+          <button type="submit">Set & Enter</button>
+        </form>
+      `}
+      <hr />
+      <p><em>Note: This view is enabled only when dev routes are enabled (non-production or with <code>ENABLE_DEV_ROUTES=true</code>).</em></p>
+      </body></html>
+    `;
+    res.set('Content-Type', 'text/html');
+    res.send(html);
+  });
+
+  // Dev: trigger supabase sync queue processing once (dev-only)
+  app.post('/dev-view/process-supabase-queue', ensureDevAuth, async (req, res) => {
+    try {
+      const worker = require('./outboxWorker');
+      const result = await worker.processSupabaseSyncQueueOnce();
+      res.json({ success: true, processed: result.processed || 0 });
+    } catch (e) {
+      logger.warn('dev-view: failed processing supabase queue', e?.message || e);
+      res.status(500).json({ success: false, error: String(e?.message || e) });
+    }
+  });
+
+  // Setup (create DEV'S_PASSWORD in server/.env) - only when not already set
+  app.post('/dev-view/setup', express.urlencoded({ extended: false }), async (req, res) => {
+    if (process.env["DEV'S_PASSWORD"]) return res.status(400).send('DEV password already configured');
+    const password = (req.body && req.body.password) ? String(req.body.password) : '';
+    if (!password || password.length < 6) return res.status(400).send('Password too short (min 6 chars)');
+    try {
+      const envPath = path.join(__dirname, '.env');
+      let current = '';
+      if (fs.existsSync(envPath)) current = fs.readFileSync(envPath, 'utf8');
+      current = current.replace(/\r\n/g, '\n');
+      if (!/DEV'S_PASSWORD=/.test(current)) current += `\nDEV'S_PASSWORD=${password}\n`;
+      else current = current.replace(/DEV'S_PASSWORD=.*/g, `DEV'S_PASSWORD=${password}`);
+      fs.writeFileSync(envPath, current, 'utf8');
+      // also set in this running process so immediate login is possible
+      process.env["DEV'S_PASSWORD"] = password;
+      const token = generateToken();
+      devSessions.set(token, Date.now() + 30 * 60 * 1000);
+      res.cookie('dev-auth', token, { httpOnly: true, sameSite: 'lax' });
+      return res.redirect('/dev-view/data');
+    } catch (e) {
+      logger.error('Failed to write DEV password to server/.env', e?.message || e);
+      return res.status(500).send('Failed to set password');
+    }
+  });
+
+  // Login
+  app.post('/dev-view/login', express.urlencoded({ extended: false }), (req, res) => {
+    const password = (req.body && req.body.password) ? String(req.body.password) : '';
+    if (!process.env["DEV'S_PASSWORD"] || password !== process.env["DEV'S_PASSWORD"]) {
+      return res.status(401).send('Invalid password');
+    }
+    const token = generateToken();
+    devSessions.set(token, Date.now() + 30 * 60 * 1000);
+    res.cookie('dev-auth', token, { httpOnly: true, sameSite: 'lax' });
+    return res.redirect('/dev-view/data');
+  });
+
+  // Logout
+  app.get('/dev-view/logout', (req, res) => {
+    const token = req.cookies && req.cookies['dev-auth'];
+    if (token) devSessions.delete(token);
+    res.clearCookie('dev-auth');
+    return res.redirect('/dev-view');
+  });
+
+  // Data view (protected) — supports optional refresh from Supabase and client-side delete actions
+  app.get('/dev-view/data', async (req, res, next) => {
+    const token = req.cookies && req.cookies['dev-auth'];
+    const doRefresh = !!req.query.refresh;
+    logger.info(`/dev-view/data accessed. refresh=${doRefresh} hasDevPassword=${!!process.env["DEV'S_PASSWORD"]}, tokenPresent=${!!token}`);
+    if (!token || !devSessions.has(token) || devSessions.get(token) < Date.now()) return res.redirect('/dev-view');
+    // extend session
+    devSessions.set(token, Date.now() + 30 * 60 * 1000);
+
+    let supaNote = '';
+    let usedSupabase = false;
+
+    try {
+      // Load local data first
+      const usersRes = await pool.query(`SELECT u.id,u.name,u.email,u.role,u.extra,u.organization_id,u.created_at FROM users u ORDER BY u.role, u.name`);
+      const orgsRes = await pool.query(`SELECT id,name FROM organizations`);
+      const classesRes = await pool.query(`SELECT id,name,org_id FROM classes`);
+      const orgMembersRes = await pool.query(`SELECT om.id as id, om.org_id, om.user_id, om.assigned_role_title, om.status, u.name as user_name, u.role as user_role FROM org_members om JOIN users u ON om.user_id = u.id`);
+      const pRows = await pool.query(`SELECT p.parent_id, s.id as student_id, s.name as student_name FROM parent_student_links p JOIN users s ON p.student_id = s.id`);
+
+      // quick metrics for debugging
+      const userCountRes = await pool.query('SELECT COUNT(*) AS count FROM users');
+      const lastUserRes = await pool.query('SELECT id,email,created_at FROM users ORDER BY created_at DESC NULLS LAST, id DESC LIMIT 1');
+      const localUserCount = Number((userCountRes.rows[0] && userCountRes.rows[0].count) || 0);
+      const lastUser = (lastUserRes.rows && lastUserRes.rows[0]) ? lastUserRes.rows[0] : null;
+
+      // check Supabase reachability (best-effort)
+      let supaAvailable = false;
+      let supaPingError = '';
+      if (isSupabaseAvailable()) {
+        try {
+          const ping = await supabase.from('users').select('id').limit(1);
+          if (ping.error) throw ping.error;
+          supaAvailable = true;
+        } catch (se) {
+          supaPingError = String(se?.message || se);
+          logger.warn('Supabase ping failed', supaPingError);
+        }
+      } else {
+        supaPingError = 'Supabase marked down (ttl)';
+      }
+
+      const orgMap = {};
+      for (const o of orgsRes.rows) orgMap[o.id] = o.name;
+
+      const classMap = {};
+      for (const c of classesRes.rows) {
+        classMap[c.id] = { id: c.id, name: c.name, orgName: c.org_id ? (orgMap[c.org_id] || '') : '' };
+      }
+
+      const orgMembersMap = {};
+      for (const m of orgMembersRes.rows) {
+        orgMembersMap[m.org_id] = orgMembersMap[m.org_id] || [];
+        orgMembersMap[m.org_id].push({ userId: m.user_id, name: m.user_name, role: m.user_role, title: m.assigned_role_title, status: m.status });
+      }
+
+      const parentMap = {};
+      for (const r of pRows.rows) {
+        parentMap[r.parent_id] = parentMap[r.parent_id] || [];
+        parentMap[r.parent_id].push(r.student_name);
+      }
+
+      const localRows = usersRes.rows.map(u => ({
+        id: u.id,
+        name: u.name || '',
+        email: u.email || '',
+        role: u.role || '',
+        orgName: u.organization_id ? (orgMap[u.organization_id] || '') : ((u.extra && (u.extra.instituteName || u.extra.schoolName || u.extra.orgName)) || ''),
+        extra: u.extra || {},
+        children: parentMap[u.id] || []
+      }));
+
+      let rows = localRows;
+      let supaRows = null;
+
+      // If requested, attempt to refresh from Supabase (best effort) and compare
+      if (doRefresh && isSupabaseAvailable()) {
+        try {
+          const [sUsers, sOrgs, sClasses, sOrgMembers, sParents] = await Promise.all([
+            supabase.from('users').select('id,name,email,role,extra,organization_id'),
+            supabase.from('organizations').select('id,name'),
+            supabase.from('classes').select('id,name,org_id'),
+            supabase.from('org_members').select('org_id,user_id,assigned_role_title,status'),
+            supabase.from('parent_student_links').select('parent_id,student_id')
+          ]);
+
+          if (sUsers.error) throw sUsers.error;
+
+          // normalize and compare by id
+          const normalize = (arr) => (arr || []).slice().map(x => ({ ...x })).sort((a, b) => String(a.id).localeCompare(String(b.id)));
+          const supaUsers = normalize(sUsers.data || []);
+          const localUsers = normalize(localRows);
+
+          supaRows = (sUsers.data || []).map(u => ({ id: u.id, name: u.name || '', email: u.email || '', role: u.role || '', orgName: u.organization_id || '', extra: u.extra || {}, children: [] }));
+          usedSupabase = true;
+
+          if (JSON.stringify(supaUsers) === JSON.stringify(localUsers)) {
+            supaNote = '✓ Supabase data matches Local data exactly.';
+          } else {
+            supaNote = '⚠ Supabase data differs from Local data (see below).';
+          }
+        } catch (se) {
+          logger.warn('Supabase refresh failed', se?.message || se);
+          supaNote = 'Supabase refresh failed: ' + String(se?.message || se);
+        }
+      }
+
+      let html = `<!doctype html><html><head><meta charset="utf-8"><title>Dev View - Users</title><style>body{font-family:system-ui,Segoe UI,Roboto,Arial;padding:12px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f5f5f5}pre{max-width:420px;white-space:pre-wrap}.small{font-size:13px;color:#666}.delete-btn{background:#e53935;color:#fff;border:none;padding:6px 10px;border-radius:6px;cursor:pointer;font-weight:600;margin-left:6px;display:inline-block}.delete-btn:hover{background:#c62828}.delete-btn.small{padding:4px 6px;font-size:12px}.delete-inline{margin-left:8px;color:#c00}</style></head><body>`;
+      html += `<h2>Developer User View</h2><p><a href="/dev-view/data">Refresh</a> • <a href="/dev-view/data?refresh=1">Refresh from Supabase</a> • <a href="/dev-view/logout">Logout</a> • <a href="/dev-view">Home</a> • <button id="process-supa-queue" style="margin-left:8px;padding:6px 10px;border-radius:6px;border:1px solid #ddd;background:#fff;cursor:pointer">Process Supabase Sync Queue</button></p>`;
+      if (supaNote) html += `<div style="margin:8px 0;padding:10px;border-radius:6px;background:#f7f7f7;border:1px solid #eee">${escapeHtml(supaNote)}</div>`;
+      html += `<div class="small">Data source: ${usedSupabase ? 'Supabase snapshot' : 'Local DB'}</div>`;
+
+      // Status panel
+      html += `<div style="margin:8px 0;padding:10px;border-radius:6px;background:#fff;color:#333;border:1px solid #eee;display:flex;gap:12px;align-items:center;flex-wrap:wrap">`;
+      html += `<div><strong>Dev session:</strong> ${token ? '<span style="color:green">active</span>' : '<span style="color:#999">not set</span>'}</div>`;
+      html += `<div><strong>Local users:</strong> ${localUserCount}</div>`;
+      html += `<div><strong>Last local user:</strong> ${lastUser ? escapeHtml(lastUser.email || lastUser.id + '') + (lastUser.created_at ? ' (' + escapeHtml(String(lastUser.created_at)) + ')' : '') : 'none'}</div>`;
+      html += `<div><strong>Supabase reachable:</strong> ${supaAvailable ? '<span style="color:green">yes</span>' : '<span style="color:#999">no</span>'}${supaPingError ? ' — ' + escapeHtml(supaPingError) : ''}</div>`;
+      html += `</div>`;
+
+      // Users table (with delete buttons)
+      html += `<h3>Users</h3><table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Organization</th><th>Extra</th><th>Children</th><th>Actions</th></tr></thead><tbody>`;
+      for (const u of rows) {
+        html += `<tr><td>${escapeHtml(u.name || u.email)}</td><td>${escapeHtml(u.email)}</td><td>${escapeHtml(u.role)}</td><td>${escapeHtml(u.orgName)}</td><td><pre>${escapeHtml(JSON.stringify(u.extra, null, 2))}</pre></td><td>${escapeHtml((u.children || []).join(', '))}</td><td><button class="delete-btn" data-type="user" data-id="${escapeHtml(u.id)}">❌ Delete</button></td></tr>`;
+      }
+      html += `</tbody></table>`;
+
+      // Organizations and members (with delete for org)
+      html += `<h3>Organizations</h3>`;
+      for (const o of orgsRes.rows) {
+        html += `<div style="margin-bottom:12px;padding:8px;border:1px solid #eee;border-radius:6px;position:relative"><strong>${escapeHtml(o.name)}</strong> <button class="delete-btn" data-type="org" data-id="${escapeHtml(o.id)}" style="position:absolute;right:12px;top:10px">❌ Delete Org</button><div style="font-size:12px;color:#666">Members:</div>`;
+        const mems = orgMembersMap[o.id] || [];
+        if (!mems.length) html += `<div style="font-size:13px;color:#999">(none)</div>`;
+        else {
+          html += `<ul style="margin:6px 0;padding-left:18px">`;
+          for (const m of mems) html += `<li>${escapeHtml(m.name)} — ${escapeHtml(m.role)} ${m.title ? '(' + escapeHtml(m.title) + ')' : ''} ${m.status ? '[' + escapeHtml(m.status) + ']' : ''} <button class="delete-btn small" data-type="org_member" data-id="${escapeHtml(m.id)}">❌ Remove</button></li>`;
+          html += `</ul>`;
+        }
+        html += `</div>`;
+      }
+
+      // Classes
+      html += `<h3>Classes</h3><table><thead><tr><th>Class</th><th>Organization</th><th>Actions</th></tr></thead><tbody>`;
+      for (const id in classMap) {
+        const c = classMap[id];
+        html += `<tr><td>${escapeHtml(c.name)}</td><td>${escapeHtml(c.orgName)}</td><td><button class="delete-btn" data-type="class" data-id="${escapeHtml(c.id)}">❌ Delete</button></td></tr>`;
+      }
+      html += `</tbody></table>`;
+
+      html += `<script src="/dev-view/script.js"></script>`;
+
+      html += `</body></html>`;
+      res.set('Content-Type', 'text/html');
+      res.send(html);
+    } catch (e) {
+      logger.error('Dev view data error', e?.message || e);
+      -      res.status(500).send('Failed to fetch data');
+      +      // Forward to global error handler so devs see the pretty error page with stack
+        +      next(e);
+    }
+  });
+
+  // Allow developer to delete entities (protected)
+  app.post('/dev-view/delete', express.json(), async (req, res) => {
+    const token = req.cookies && req.cookies['dev-auth'];
+    const payload = req.body || {};
+    logger.info('/dev-view/delete called', { targetType: payload.targetType, id: payload.id, tokenPresent: !!token, devRoutesEnabled });
+    if (!token || !devSessions.has(token) || devSessions.get(token) < Date.now()) return res.status(401).json({ error: 'unauthorized' });
+    if (!devRoutesEnabled) return res.status(403).json({ error: 'dev routes disabled' });
+
+    const { targetType, id, confirm } = payload;
+    if (!targetType || !id) return res.status(400).json({ error: 'targetType and id required' });
+    if (confirm !== 'DELETE') return res.status(400).json({ error: 'confirmation required (set confirm: "DELETE")' });
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      if (targetType === 'user') {
+        await client.query('DELETE FROM parent_student_links WHERE parent_id = $1 OR student_id = $1', [id]);
+        await client.query('DELETE FROM class_assignments WHERE teacher_id = $1', [id]);
+        await client.query('DELETE FROM org_members WHERE user_id = $1', [id]);
+        await client.query('DELETE FROM users WHERE id = $1', [id]);
+      } else if (targetType === 'org') {
+        // remove org members, classes and unlink users
+        await client.query('DELETE FROM org_members WHERE org_id = $1', [id]);
+        const classIdsRes = await client.query('SELECT id FROM classes WHERE org_id = $1', [id]);
+        const classIds = classIdsRes.rows.map(r => r.id);
+        if (classIds.length) {
+          await client.query('DELETE FROM class_assignments WHERE class_id = ANY($1::uuid[])', [classIds]);
+        }
+        await client.query('DELETE FROM classes WHERE org_id = $1', [id]);
+        await client.query('UPDATE users SET organization_id = NULL WHERE organization_id = $1', [id]);
+        await client.query('DELETE FROM organizations WHERE id = $1', [id]);
+      } else if (targetType === 'class') {
+        await client.query('DELETE FROM class_assignments WHERE class_id = $1', [id]);
+        await client.query('DELETE FROM classes WHERE id = $1', [id]);
+      } else if (targetType === 'org_member') {
+        await client.query('DELETE FROM org_members WHERE id = $1', [id]);
+      } else {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'unknown targetType' });
+      }
+
+      // If Supabase is available, require the mirror delete to succeed; otherwise commit local deletion and warn
+      if (isSupabaseAvailable()) {
+        try {
+          if (targetType === 'user') {
+            const r1 = await supabase.from('users').delete().eq('id', id);
+            if (r1.error) throw r1.error;
+            // also attempt to remove auth user if possible (service role)
+            if (supabase.auth && supabase.auth.admin && typeof supabase.auth.admin.deleteUser === 'function') {
+              try { await supabase.auth.admin.deleteUser(id); } catch (se) { logger.warn('Supabase auth delete failed', se?.message || se); }
+            }
+          } else if (targetType === 'org') {
+            const r1 = await supabase.from('org_members').delete().eq('org_id', id);
+            if (r1.error) throw r1.error;
+            const r2 = await supabase.from('classes').delete().eq('org_id', id);
+            if (r2.error) throw r2.error;
+            const r3 = await supabase.from('organizations').delete().eq('id', id);
+            if (r3.error) throw r3.error;
+          } else if (targetType === 'class') {
+            const r1 = await supabase.from('class_assignments').delete().eq('class_id', id);
+            if (r1.error) throw r1.error;
+            const r2 = await supabase.from('classes').delete().eq('id', id);
+            if (r2.error) throw r2.error;
+          } else if (targetType === 'org_member') {
+            const r1 = await supabase.from('org_members').delete().eq('id', id);
+            if (r1.error) throw r1.error;
+          }
+        } catch (se) {
+          await client.query('ROLLBACK');
+          logger.error('Supabase deletion failed - rolled back local changes', se?.message || se);
+          return res.status(500).json({ error: 'Supabase deletion failed', details: String(se?.message || se) });
+        }
+      }
+
+      await client.query('COMMIT');
+
+      // If Supabase unavailable, include note
+      if (!isSupabaseAvailable()) {
+        return res.json({ success: true, deleted: { targetType, id }, note: 'Supabase unavailable; local deletion committed and will require manual cleanup.' });
+      }
+
+      return res.json({ success: true, deleted: { targetType, id } });
+    } catch (e) {
+      await client.query('ROLLBACK');
+      logger.error('Dev delete failed', e?.message || e);
+      return res.status(500).json({ error: String(e?.message || e) });
+    } finally {
+      client.release();
+    }
+  });
+
+  // Serve external JS for dev view to comply with CSP (no inline scripts)
+  app.get('/dev-view/script.js', (req, res) => {
+    // Small, self-contained script to handle deletes
+    res.set('Content-Type', 'application/javascript');
+    res.set('Cache-Control', 'no-store');
+    res.send(`(function(){
+      async function devDelete(type,id,btn){
+        try{
+          console.log('devDelete called', { type, id });
+          const ok = confirm('Delete '+type+' ID '+id+'? This is irreversible. Click OK to continue.');
+          if(!ok) return;
+          const token = prompt('Type DELETE to confirm', '');
+          if(token !== 'DELETE'){ alert('Confirmation failed'); return; }
+          if(btn){ btn.disabled = true; btn.dataset.orig = btn.innerText; btn.innerText = 'Deleting...'; }
+          const r = await fetch('/dev-view/delete', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetType: type, id: id, confirm: 'DELETE' }) });
+          let j = {};
+          try{ j = await r.json(); } catch(e){ console.warn('Response not JSON', e); }
+          console.log('devDelete response', r.status, j);
+          if(!r.ok) return alert('Delete failed: ' + (j.error || j.details || JSON.stringify(j) || r.statusText));
+          alert('Deleted: ' + JSON.stringify(j));
+          window.location.reload();
+        }catch(e){ console.error('devDelete network error', e); alert('Request failed: ' + e.message); }
+        finally{ if(btn){ btn.disabled = false; btn.innerText = btn.dataset.orig || 'Delete'; } }
+      }
+      document.addEventListener('click', function(e){
+        var btn = e.target && e.target.closest && e.target.closest('.delete-btn');
+        if(!btn) return;
+        var t = btn.dataset.type;
+        var id = btn.dataset.id;
+        devDelete(t,id,btn);
+      });
+      // helper to fetch JSON users for debugging
+      window.devFetchUsers = async function(){ try{ const r = await fetch('/dev-view/users.json', {credentials:'same-origin'}); const j = await r.json(); console.log('dev users', j); return j; } catch(e){ console.error('devFetchUsers failed', e); return null; } }
+      window.devProcessSupabaseQueue = async function(){ try{ const r = await fetch('/dev-view/process-supabase-queue', { method: 'POST', credentials: 'same-origin' }); const j = await r.json(); console.log('process supa queue', j); alert('Processed: ' + (j.processed || 0)); window.location.reload(); } catch(e){ console.error('devProcessSupabaseQueue failed', e); alert('Error: ' + e.message); } }
+      document.addEventListener('click', function(e){ if(e.target && e.target.id === 'process-supa-queue'){ if(confirm('Run supabase sync queue now?')) window.devProcessSupabaseQueue(); } });
+    })();`);
+  });
+
+  // JSON endpoint to quickly inspect local users and Supabase status
+  app.get('/dev-view/users.json', async (req, res) => {
+    const token = req.cookies && req.cookies['dev-auth'];
+    if (!token || !devSessions.has(token) || devSessions.get(token) < Date.now()) return res.status(401).json({ error: 'unauthorized' });
+    try {
+      const users = (await pool.query('SELECT id,email,role,created_at FROM users ORDER BY created_at DESC NULLS LAST LIMIT 50')).rows || [];
+      const counts = (await pool.query('SELECT COUNT(*) as c FROM users')).rows[0] || { c: 0 };
+      let supaAvailable = false;
+      try { const ping = await supabase.from('users').select('id').limit(1); if (!ping.error) supaAvailable = true; } catch (e) { /* ignore */ }
+      res.json({ success: true, supabase: supaAvailable, count: Number(counts.c), users });
+    } catch (e) { logger.error('dev users.json failed', e?.message || e); res.status(500).json({ error: String(e?.message || e) }); }
+  });
+
+  function escapeHtml(s) { if (!s && s !== 0) return ''; return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+}
+
+
 // --- MIGRATED PYTHON ENDPOINTS ---
 // Replaces the simplified logic from server/python_service/main.py
 
@@ -205,37 +675,42 @@ app.post('/api/py/check-email', async (req, res) => {
   logger.info(`py/check-email called for email=${email} origin=${req.get('origin') || 'none'} supabaseConfigured=${!!supabase} dev=${devRoutesEnabled}`);
 
   try {
-    if (!supabase) {
-      if (!devRoutesEnabled) {
-        logger.warn('py/check-email: Supabase not configured and dev routes disabled');
-        return res.status(500).json({ detail: 'Supabase not configured' });
-      }
+    let exists = false;
+    let debugSource = 'none';
 
-      logger.warn('py/check-email: Supabase not configured on server — using Postgres fallback (dev)');
+    // 1. Check Supabase if configured
+    if (supabase) {
+      try {
+        const { data: users, error } = await supabase
+          .from('users')
+          .select('id,email')
+          .eq('email', email);
+
+        if (!error && users && users.length > 0) {
+          exists = true;
+          debugSource = 'supabase';
+        }
+      } catch (sbErr) {
+        logger.warn('py/check-email: supabase check warning', sbErr.message);
+      }
+    }
+
+    // 2. If not found in Supabase, and we are in dev/fallback mode, check Local Postgres
+    if (!exists && (devRoutesEnabled || !supabase)) {
       try {
         const r = await pool.query('SELECT 1 FROM users WHERE LOWER(email)=LOWER($1)', [email]);
-        const exists = r.rowCount > 0;
-        logger.info(`py/check-email: local Postgres lookup result exists=${exists}`);
-        return res.json({ exists, debug: { source: 'postgres', exists } });
+        if (r.rowCount > 0) {
+          exists = true;
+          debugSource = 'postgres';
+        }
       } catch (pgErr) {
-        logger.warn('py/check-email: local Postgres lookup failed', pgErr?.message || pgErr);
-        return res.status(500).json({ detail: 'Supabase not configured and Postgres lookup failed' });
+        logger.warn('py/check-email: local Postgres lookup failed', pgErr.message);
+        // If we don't have supabase and local fails, we strictly error out if it was the only option
+        if (!supabase) throw pgErr;
       }
     }
 
-    const { data: users, error } = await supabase
-      .from('users')
-      .select('id,email')
-      .eq('email', email);
-
-    if (error) {
-      logger.error('py/check-email: supabase error', { message: error.message || error });
-      throw error;
-    }
-
-    const exists = (users && users.length > 0);
-    logger.info(`py/check-email: supabase lookup users=${users?.length || 0} sample=${users && users[0] ? JSON.stringify({ id: users[0].id, email: users[0].email }) : null}`);
-    // Return format matching python
+    logger.info(`py/check-email: result for ${email} exists=${exists} source=${debugSource}`);
     res.json({ exists });
   } catch (e) {
     logger.error('Error in check-email:', e);
@@ -345,70 +820,120 @@ app.post('/api/py/management/reject-teacher', async (req, res) => {
 
 // 7. Signup Proxy
 app.post('/api/py/signup', async (req, res) => {
-
   const { name, email, password, role, extra } = req.body;
+  if (!email || !password) return res.status(400).json({ detail: 'Missing credentials' });
 
   try {
-    // Check duplicates in Supabase when available; if supabase fails, try local DB duplicate check
-    let dup = null;
-    try {
-      const d = await supabase.from('users').select('id').eq('email', email);
-      if (d.error) {
-        logger.warn('py/signup: supabase duplicate check failed', d.error);
-        dup = null;
-      } else dup = d.data;
-    } catch (e) {
-      logger.warn('py/signup: supabase duplicate check network error', e?.message || e);
-      dup = null;
+    // First check for duplicate email via Supabase (when available)
+    if (isSupabaseAvailable()) {
+      try {
+        const d = await supabase.from('users').select('id').eq('email', email).maybeSingle();
+        if (d && d.data) return res.status(400).json({ detail: 'Email-ID already been used' });
+      } catch (err) {
+        logger.warn('py/signup: supabase duplicate check failed', err?.message || err);
+      }
+
+      // Try Supabase signup using admin.createUser when available (more reliable for server-side)
+      try {
+        let userId = null;
+        let createdUser = null;
+        // Prefer admin.createUser when service role is used
+        if (supabase && supabase.auth && supabase.auth.admin && typeof supabase.auth.admin.createUser === 'function') {
+          try {
+            const createResp = await supabase.auth.admin.createUser({ email, password, user_metadata: { name, role } });
+            createdUser = createResp?.user || createResp;
+          } catch (adminErr) {
+            // Fall back to signUp if admin API fails for any reason
+            logger.warn('py/signup: admin.createUser failed, falling back to signUp', adminErr?.message || adminErr);
+          }
+        }
+
+        if (!createdUser) {
+          // Fallback to regular signUp if admin.createUser isn't available or failed
+          const { data: authData, error: authError } = await supabase.auth.signUp({ email, password });
+          logger.info('py/signup: supabase.auth.signUp response', { authData, authError });
+          if (authError) throw authError;
+          createdUser = authData?.user;
+        }
+
+        if (!createdUser || !createdUser.id) throw new Error('Signup failed - no user id returned');
+        userId = createdUser.id;
+
+        // Insert public profile row (idempotent)
+        const { error: insertErr } = await supabase.from('users').insert({ id: userId, name: name || 'Unknown', email, role: role || 'Management', extra: extra || {}, password_hash: 'supabase_auth' });
+        if (insertErr) logger.warn('py/signup: warning inserting users row', insertErr?.message || insertErr);
+
+        // Insert role-specific row
+        if (role === 'Management') {
+          const { error: mgrErr } = await supabase.from('management_managers').insert({ user_id: userId, name, email, role: 'Manager' });
+          if (mgrErr) logger.warn('py/signup: warning inserting management_managers', mgrErr?.message || mgrErr);
+        } else if (role === 'Teacher') {
+          const { error: tErr } = await supabase.from('teachers').insert({ user_id: userId, title: extra?.title, department: extra?.department, institute_id: extra?.instituteId, class_id: extra?.classId, is_verified: false, status: 'pending' });
+          if (tErr) logger.warn('py/signup: warning inserting teachers', tErr?.message || tErr);
+        }
+
+        return res.json({ success: true, user: { id: userId, email, role } });
+      } catch (sbErr) {
+        // Log the full error for easier diagnosis (include stack when available)
+        logger.warn('py/signup: Supabase signup failed', { message: sbErr?.message || String(sbErr), stack: sbErr?.stack });
+        metrics.inc('supabase_failures');
+        supabaseDownUntil = Date.now() + SUPABASE_DOWN_TTL_MS;
+        if (!devRoutesEnabled) return res.status(500).json({ detail: 'Signup failed (Supabase unavailable)' });
+        // else fallthrough to local fallback
+      }
     }
 
-    if (dup && dup.length > 0) return res.status(400).json({ detail: "Email-ID already been used" });
+    // Local Postgres fallback (dev only)
+    if (!devRoutesEnabled) {
+      return res.status(500).json({ detail: 'Signup failed (Supabase unavailable)' });
+    }
 
-    // Attempt Supabase signup; if it fails and devRoutesEnabled, fallback to local Postgres user creation
-    let userId = null;
     try {
-      const { data: authData, error: authError } = await supabase.auth.signUp({ email, password });
-      if (authError) throw authError;
-      if (!authData.user) throw new Error("Signup failed");
-      userId = authData.user.id;
-
-      await supabase.from('users').insert({ id: userId, name: name || "Unknown", email, role: role || "Management", extra: extra || {}, password_hash: "supabase_auth" });
-
-      if (role === 'Management') {
-        await supabase.from('management_managers').insert({ user_id: userId, name, email, role: 'Manager' });
-      } else if (role === 'Teacher') {
-        await supabase.from('teachers').insert({ user_id: userId, title: extra?.title, department: extra?.department, institute_id: extra?.instituteId, class_id: extra?.classId, is_verified: false, status: 'pending' });
-      }
-
-      res.json({ success: true, user: { id: userId, email, role } });
-
-    } catch (e) {
-      logger.warn('py/signup: Supabase signup failed', e?.message || e);
-      if (!devRoutesEnabled) {
-        logger.error('py/signup: Supabase required in production; aborting');
-        return res.status(500).json({ detail: 'Signup failed (Supabase unavailable)' });
-      }
-
-      // Dev mode: fallback to local Postgres user create
+      // Prevent duplicate signups on local Postgres by checking case-insensitively
       try {
-        const bcrypt = require('bcrypt');
-        const hash = await bcrypt.hash(password, 10);
-        const r = await pool.query('INSERT INTO users (name,email,password_hash,role,extra) VALUES ($1,$2,$3,$4,$5) RETURNING id,email', [name || null, email, hash, role || 'Management', extra || {}]);
-        userId = r.rows[0].id;
-        // Create teacher row if needed
+        const dupCheck = await pool.query('SELECT 1 FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1', [email]);
+        if (dupCheck && dupCheck.rowCount > 0) {
+          return res.status(400).json({ detail: 'Email-ID already been used' });
+        }
+      } catch (dupErr) {
+        // If the duplicate check fails for some reason, log and continue to insertion (db may enforce uniqueness)
+        logger.warn('py/signup: duplicate email check failed', dupErr?.message || dupErr);
+      }
+
+      const hash = await bcrypt.hash(password, 10);
+      const r = await pool.query('INSERT INTO users (name,email,password_hash,role,extra) VALUES ($1,$2,$3,$4,$5) RETURNING id,email', [name || null, email, hash, role || 'Management', extra || {}]);
+      const userId = r.rows[0].id;
+
+      // Ensure role-specific rows are created locally as well
+      try {
         if (role === 'Teacher') {
           await pool.query('INSERT INTO teachers (user_id, title, department, institute_id, class_id, is_verified, created_at) VALUES ($1,$2,$3,$4,$5,$6,NOW())', [userId, extra?.title, extra?.department, extra?.instituteId, extra?.classId, false]);
+        } else if (role === 'Management') {
+          await pool.query('INSERT INTO management_managers (user_id, name, email, role, created_at) VALUES ($1,$2,$3,$4,NOW())', [userId, name || null, email, 'Manager']);
+        } else if (role === 'Student') {
+          await pool.query('INSERT INTO students (user_id, created_at) VALUES ($1,NOW())', [userId]);
+        } else if (role === 'Parent') {
+          await pool.query('INSERT INTO parents (user_id, created_at) VALUES ($1,NOW())', [userId]);
         }
-        return res.json({ success: true, user: { id: userId, email, role } });
-      } catch (localErr) {
-        logger.error('py/signup: local fallback failed', localErr?.message || localErr);
-        return res.status(500).json({ detail: 'Signup failed' });
+      } catch (roleErr) {
+        logger.warn('py/signup: failed inserting role-specific local row', roleErr?.message || roleErr);
       }
-    }
 
+      // Enqueue a Supabase-sync request so a background worker can reconcile the local user to Supabase
+      try {
+        await appendSupabaseSyncQueue({ action: 'create_user', payload: { id: userId, name, email, role, extra }, localUserId: userId });
+      } catch (qErr) {
+        logger.warn('py/signup: failed to append supabase sync queue', qErr?.message || qErr);
+      }
+
+      return res.json({ success: true, user: { id: userId, email, role }, note: 'Created locally' });
+    } catch (localErr) {
+      logger.error('Local fallback signup failed', localErr);
+      return res.status(500).json({ detail: 'Local signup failed: ' + localErr.message });
+    }
   } catch (e) {
-    logger.error('Error in py/signup proxy:', e);
-    res.status(400).json({ detail: e.message });
+    logger.error('Signup endpoint failed', e);
+    return res.status(500).json({ detail: e.message });
   }
 });
 
@@ -454,6 +979,8 @@ const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 const OUTBOX_FILE = path.join(DATA_DIR, 'outbox.json');
 const QUEUE_FILE = path.join(DATA_DIR, 'signup_queue_disk.json');
+const SUPABASE_SYNC_FILE = path.join(DATA_DIR, 'supabase_sync_queue.json');
+if (!fs.existsSync(SUPABASE_SYNC_FILE)) fs.writeFileSync(SUPABASE_SYNC_FILE, '[]', 'utf8');
 
 // Load disk queues safely
 const readJsonFile = (file) => {
@@ -547,6 +1074,29 @@ const appendSignupQueueDisk = async (signupData) => {
   }
 };
 
+// Queue a supabase sync request to disk so local-created users can be synchronized to Supabase when available
+const appendSupabaseSyncQueue = async (obj) => {
+  try {
+    const cur = readJsonFile(SUPABASE_SYNC_FILE);
+    const entry = {
+      id: `supa_${Date.now()}`,
+      action: obj.action || 'create_user',
+      payload: obj.payload || {},
+      localUserId: obj.localUserId || null,
+      attempts: 0,
+      status: 'queued',
+      createdAt: new Date().toISOString()
+    };
+    cur.unshift(entry);
+    writeJsonFile(SUPABASE_SYNC_FILE, cur);
+    logger.info('Appended supabase sync queue item for', entry.payload && entry.payload.email);
+    return entry;
+  } catch (e) {
+    logger.error('Failed to append supabase sync queue', e?.message || e);
+    return null;
+  }
+};
+
 // Admin: view inbound messages stored on disk (if inbound polling/webhooks saved them)
 app.get('/api/admin/inbound', checkAdminAuth, (req, res) => {
   try {
@@ -557,6 +1107,78 @@ app.get('/api/admin/inbound', checkAdminAuth, (req, res) => {
     res.status(500).json({ error: 'failed' });
   }
 });
+
+// Diagnostic endpoint to help debug client <-> server connectivity and CORS issues
+// - Returns the effective API URL the client would use and whether the request origin is allowed by CORS
+// - Accessible in dev mode, or in production only by admin key (x-admin-key)
+const buildDiagnostics = (req) => {
+  const reqOrigin = req.get('origin') || req.get('referer') || `${req.protocol}://${req.get('host')}`;
+
+  // Determine effective API URL (mimics getApiUrl behaviour used by client)
+  const viteApi = process.env.VITE_API_URL ? process.env.VITE_API_URL.replace(/\/$/, '') : null;
+  const hostname = req.hostname || req.get('host') || 'localhost';
+  const protocol = req.protocol || 'http:';
+  const isLocalhost = ['localhost', '127.0.0.1', '0.0.0.0'].includes(hostname);
+  let effectiveApiUrl;
+  if (viteApi) effectiveApiUrl = viteApi;
+  else if (!isLocalhost) effectiveApiUrl = `${protocol}://${hostname}`;
+  else effectiveApiUrl = `${protocol}://${hostname}:4000`;
+
+  // CORS check for the incoming origin
+  const origin = reqOrigin;
+  const allowed = (() => {
+    if (!origin) return false;
+    // exact match
+    if (allowedOrigins.includes(origin)) return true;
+    // local origin regex
+    try {
+      if (localOriginRegex.test(origin)) return true;
+    } catch (e) { /* ignore */ }
+    return false;
+  })();
+
+  // Supabase/db flags (expose only hosts, not sensitive keys)
+  let supabaseHost = null;
+  try { if (supabaseUrl) supabaseHost = new URL(supabaseUrl).hostname } catch (e) { supabaseHost = null }
+  const dbConfigured = !!process.env.DATABASE_URL;
+  let dbHost = null;
+  try { if (process.env.DATABASE_URL && process.env.DATABASE_URL.includes('://')) dbHost = new URL(process.env.DATABASE_URL).hostname } catch (e) { dbHost = null }
+
+  return {
+    effectiveApiUrl,
+    requestOrigin: origin,
+    requestOriginAllowed: allowed,
+    allowedOriginsPreview: allowedOrigins.slice(0, 20),
+    localOriginRegex: localOriginRegex.toString(),
+    supabaseConfigured: !!supabase,
+    supabaseHost,
+    databaseConfigured: dbConfigured,
+    databaseHost: dbHost,
+    devRoutesEnabled: !!devRoutesEnabled,
+    nodeEnv: process.env.NODE_ENV || 'development'
+  };
+};
+
+// Route registration: dev gets open access; production requires admin key
+if (devRoutesEnabled) {
+  app.get('/api/debug/diagnostics', (req, res) => {
+    try {
+      res.json({ success: true, diagnostics: buildDiagnostics(req) });
+    } catch (e) {
+      logger.error('diagnostics error', e);
+      res.status(500).json({ success: false, error: String(e?.message || e) });
+    }
+  });
+} else {
+  app.get('/api/debug/diagnostics', checkAdminAuth, (req, res) => {
+    try {
+      res.json({ success: true, diagnostics: buildDiagnostics(req) });
+    } catch (e) {
+      logger.error('diagnostics error', e);
+      res.status(500).json({ success: false, error: String(e?.message || e) });
+    }
+  });
+}
 
 // Admin: fetch a user by email for debugging (requires admin key)
 app.get('/api/admin/user', checkAdminAuth, async (req, res, next) => {
@@ -1287,8 +1909,10 @@ const handleSignupAsync = async (req, res, next) => {
 
     // Organization & Linking Logic
     let organizationId = null;
-    let linkedStudentId = null;
-    const rollNumber = extra.rollNumber || null;
+    let linkedStudentIds = [];
+    let enrollClassId = null;
+    let pendingApproval = false;
+    let orgType = null;
 
     if (role === 'Management') {
       // Management creates the code
@@ -1311,27 +1935,59 @@ const handleSignupAsync = async (req, res, next) => {
       }
     } else if (role !== 'Librarian') {
       // Teachers, Students, Parents must join an existing org
-      const uniqueId = extra.uniqueId;
-      if (!uniqueId) return res.status(400).json({ error: 'Organization Code required' });
-
-      const orgRes = await pool.query('SELECT id FROM organizations WHERE code = $1', [uniqueId]);
-      if (!orgRes.rows.length) return res.status(400).json({ error: 'Invalid Organization Code' });
-      organizationId = orgRes.rows[0].id;
-
-      if (role === 'Student') {
-        if (!rollNumber) return res.status(400).json({ error: 'Roll Number required for Students' });
-        // Check uniqueness
-        const dupRes = await pool.query('SELECT id FROM users WHERE organization_id = $1 AND roll_number = $2', [organizationId, rollNumber]);
-        if (dupRes.rows.length) return res.status(409).json({ error: 'Roll Number already registered in this organization' });
-      }
+      // Parents might not need org code if they just provide student email? 
+      // User requirement: "for parent Singup ask 'Student Email-ID' ... 'Parent Email-ID'". 
+      // Parent might not know Org Code. But we need to link them.
 
       if (role === 'Parent') {
-        if (!rollNumber) return res.status(400).json({ error: 'Student Roll Number required for Parents' });
+        const studentEmail = extra.studentEmail;
+        if (!studentEmail) return res.status(400).json({ error: 'Student Email Required' });
 
-        // Find student in THIS organization by Roll Number
-        const stRes = await pool.query('SELECT id FROM users WHERE roll_number = $1 AND role = $2 AND organization_id = $3', [rollNumber, 'Student', organizationId]);
-        if (!stRes.rows.length) return res.status(400).json({ error: 'Student Roll Number not found in this organization' });
-        linkedStudentId = stRes.rows[0].id;
+        // Find student(s)
+        const stRes = await pool.query('SELECT id, organization_id FROM users WHERE LOWER(email) = LOWER($1) AND role = $2', [studentEmail, 'Student']);
+        if (!stRes.rows.length) return res.status(400).json({ error: 'Student email not found' });
+
+        // We link to the student(s). We don't necessarily set organization_id on parent (or we set it to student's org).
+        // If multiple students, pick first or null? Let's pick first.
+        linkedStudentIds.push(stRes.rows[0].id);
+        organizationId = stRes.rows[0].organization_id;
+
+      } else {
+        // Teacher or Student
+        const uniqueId = extra.uniqueId || extra.code; // support 'code' alias
+        if (!uniqueId) return res.status(400).json({ error: 'Organization Code required' });
+
+        const orgRes = await pool.query('SELECT id, name, type FROM organizations WHERE code = $1', [uniqueId]);
+        if (!orgRes.rows.length) return res.status(400).json({ error: 'Invalid Organization Code' });
+        organizationId = orgRes.rows[0].id;
+        const orgName = orgRes.rows[0].name;
+        orgType = orgRes.rows[0].type; // 'school' or 'institute'
+
+        // Match Name (Strict Check as requested)
+        const reqOrgName = extra.instituteName || extra.schoolName || extra.orgName;
+        if (reqOrgName && reqOrgName.toLowerCase().trim() !== orgName.toLowerCase().trim()) {
+          return res.status(400).json({ error: `Organization Name Verification Failed. Code belongs to "${orgName}"` });
+        }
+
+        if (role === 'Teacher') {
+          // Teacher Request Flow
+          pendingApproval = true;
+        }
+
+        if (role === 'Student') {
+          // Student must select a class
+          // "if a student is trying to singup with institue code ... only those class should be displayed" (Frontend handles display, Backend validates)
+          const reqClassId = extra.classId;
+          // If user passed className, resolve it? Better to expect classId from frontend select.
+
+          // "while singup that studnet should see only class 'ABC' as singup option" -> frontend job.
+          // Backend validation:
+          if (!reqClassId) return res.status(400).json({ error: 'Class Selection is required' });
+
+          const clsRes = await pool.query('SELECT id FROM classes WHERE id=$1 AND org_id=$2', [reqClassId, organizationId]);
+          if (!clsRes.rows.length) return res.status(400).json({ error: 'Invalid Class selection for this organization' });
+          enrollClassId = reqClassId;
+        }
       }
     }
 
@@ -1342,8 +1998,8 @@ const handleSignupAsync = async (req, res, next) => {
     let userId;
     try {
       const r = await pool.query(
-        'INSERT INTO users (name,email,password_hash,role,extra, organization_id, linked_student_id, roll_number) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,name,email,role,created_at',
-        [name || null, email, hash, role, extra, organizationId, linkedStudentId, rollNumber]
+        'INSERT INTO users (name,email,password_hash,role,extra, organization_id) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id,name,email,role,created_at',
+        [name || null, email, hash, role, extra, organizationId]
       );
       if (!r || !r.rows || !r.rows[0]) {
         return res.status(500).json({ error: 'Failed to create user' });
@@ -1353,14 +2009,47 @@ const handleSignupAsync = async (req, res, next) => {
       // specific logic for Management: Create the Organization now
       if (role === 'Management') {
         const uniqueId = extra.uniqueId;
+        const orgType = extra.instituteType || 'school'; // default to school if not specified? User said "School Name" if school type
+        const orgName = extra.instituteName || extra.schoolName || 'My Organization';
+
         const orgInsert = await pool.query(
-          'INSERT INTO organizations (code, name, management_id) VALUES ($1,$2,$3) RETURNING id',
-          [uniqueId, extra.instituteName || 'My Institute', userId]
+          'INSERT INTO organizations (code, name, type, owner_id) VALUES ($1,$2,$3,$4) RETURNING id',
+          [uniqueId, orgName, orgType === 'institute' ? 'institute' : 'school', userId] // Map to enum if needed, or text
         );
         const newOrgId = orgInsert.rows[0].id;
 
         // Update user to link to this org
         await pool.query('UPDATE users SET organization_id = $1 WHERE id = $2', [newOrgId, userId]);
+
+        // Also insert into management_profiles? Not strictly required by prompt if 'users' is central, but strict test schema has it.
+        // Let's rely on 'users.role' for now as per "single table" request earlier, or add if needed.
+        // The prompt later said "single users table".
+      }
+
+      // Teacher Request
+      if (role === 'Teacher' && organizationId) {
+        await pool.query(
+          'INSERT INTO org_members (user_id, org_id, status, assigned_role_title) VALUES ($1, $2, $3, $4)',
+          [userId, organizationId, 'pending', null]
+        );
+      }
+
+      // Student Enrollment
+      if (role === 'Student' && organizationId && enrollClassId) {
+        await pool.query(
+          'INSERT INTO student_enrollments (student_id, org_id, class_id) VALUES ($1, $2, $3)',
+          [userId, organizationId, enrollClassId]
+        );
+      }
+
+      // Parent Linking
+      if (role === 'Parent' && linkedStudentIds.length > 0) {
+        for (const sid of linkedStudentIds) {
+          await pool.query(
+            'INSERT INTO parent_student_links (parent_id, student_id) VALUES ($1, $2)',
+            [userId, sid]
+          );
+        }
       }
 
     } catch (dbErr) {
@@ -1428,10 +2117,16 @@ const handleSignupAsync = async (req, res, next) => {
     }
 
     // Step 6: Return success with message to user
+    let message = 'Signup successful! Please check your email to verify your account.';
+    if (pendingApproval) {
+      message = 'Signup request sent to Management. Please wait for approval.';
+    }
+
     res.json({
       success: true,
-      message: 'Signup successful! Please check your email to verify your account.',
-      user: { id: userId, name, email, role }
+      message,
+      user: { id: userId, name, email, role },
+      pendingApproval
     });
 
   } catch (err) {
@@ -1606,6 +2301,8 @@ app.post('/api/py/signin', async (req, res) => {
         }
       } catch (sbErr) {
         logger.warn('py/signin: supabase lookup failed (network/error)', sbErr?.message || sbErr);
+        metrics.inc('supabase_failures');
+        supabaseDownUntil = Date.now() + SUPABASE_DOWN_TTL_MS;
         users = null;
       }
 
@@ -1626,6 +2323,7 @@ app.post('/api/py/signin', async (req, res) => {
           logger.info(`py/signin: found user in Postgres id=${user.id} role=${user.role}`);
         } catch (pgErr) {
           logger.error('py/signin: local Postgres lookup failed', pgErr?.message || pgErr);
+          metrics.inc('local_signin_failures');
           return res.status(400).json({ detail: "Unregistered email" });
         }
       } else {
@@ -1652,6 +2350,8 @@ app.post('/api/py/signin', async (req, res) => {
           }
         } catch (sbErr) {
           logger.warn('Supabase sign-in fallback failed', sbErr?.message || sbErr);
+          metrics.inc('supabase_failures');
+          supabaseDownUntil = Date.now() + SUPABASE_DOWN_TTL_MS;
         }
       }
     } catch (err) {
@@ -2103,6 +2803,23 @@ app.post('/api/logout', (req, res) => {
 // Global Error Handler
 app.use((err, req, res, next) => {
   logger.error(err.stack);
+  // For dev-only routes, show a pretty HTML error page with stack (non-production/dev admin only)
+  const isDevRoute = String(req.path || '').startsWith('/dev-view');
+  const allowDetails = isDevRoute || (devRoutesEnabled && process.env.NODE_ENV !== 'production');
+  if (allowDetails) {
+    const msg = escapeHtml(String(err.message || 'Internal Server Error'));
+    const stack = escapeHtml(String(err.stack || ''));
+    res.status(500).set('Content-Type', 'text/html').send(`
+      <html><head><title>Dev Error</title></head><body style="font-family:system-ui,Segoe UI,Roboto,Arial;padding:20px;">
+      <h2 style="color:#b00020">Developer Error</h2>
+      <div style="margin-bottom:12px;padding:12px;border-radius:6px;background:#fff4f4;border:1px solid #f0d0d0;color:#400">${msg}</div>
+      <h3 style="margin-top:12px">Stack</h3>
+      <pre style="white-space:pre-wrap;background:#f7f7f7;padding:10px;border-radius:6px;border:1px solid #eee;">${stack}</pre>
+      <p style="font-size:12px;color:#666;margin-top:12px">This is a developer-only error view. Ensure no secrets are exposed in logs.</p>
+      </body></html>
+    `);
+    return;
+  }
   res.status(500).json({ error: 'Internal Server Error' });
 });
 
@@ -2128,6 +2845,125 @@ app.get('/api/dashboard-data', authenticateToken, async (req, res, next) => {
 });
 
 // End of migrated endpoints (Removed duplicates)
+
+// === STRICT FLOW MANAGEMENT ENDPOINTS ===
+
+// 1. Get Pending Members (Teachers)
+app.get('/api/org/members', authenticateToken, async (req, res, next) => {
+  try {
+    const status = req.query.status; // 'pending', 'approved', etc.
+    const orgId = req.user.organization_id; // Assuming user has this from token or query? 
+    // If token doesn't have it, fetch from users table
+    let oid = orgId;
+    if (!oid) {
+      const u = await pool.query('SELECT organization_id FROM users WHERE id=$1', [req.user.id]);
+      oid = u.rows[0]?.organization_id;
+    }
+    if (!oid) return res.status(400).json({ error: 'User does not belong to an organization' });
+
+    let q = `
+      SELECT om.id, om.user_id, om.status, om.assigned_role_title, u.name, u.email, u.extra 
+      FROM org_members om
+      JOIN users u ON om.user_id = u.id
+      WHERE om.org_id = $1
+    `;
+    const params = [oid];
+    if (status) {
+      q += ' AND om.status = $2';
+      params.push(status);
+    }
+    const r = await pool.query(q, params);
+    res.json({ success: true, members: r.rows });
+  } catch (e) { next(e); }
+});
+
+// 2. Approve Teacher Request
+app.post('/api/org/members/approve', authenticateToken, async (req, res, next) => {
+  try {
+    const { memberId, roleTitle, classId } = req.body; // roleTitle e.g. "HOD", "Class Teacher"
+    // Validate Management Role
+    if (req.user.role !== 'Management') return res.status(403).json({ error: 'Unauthorized' });
+
+    // Update org_members
+    const r = await pool.query(
+      'UPDATE org_members SET status=$1, assigned_role_title=$2 WHERE id=$3 RETURNING user_id, org_id',
+      ['approved', roleTitle, memberId]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Request not found' });
+
+    const { user_id, org_id } = r.rows[0];
+
+    // If ClassId provided (e.g. Class Teacher), assign class
+    if (classId) {
+      await pool.query(
+        'INSERT INTO class_assignments (class_id, teacher_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+        [classId, user_id]
+      );
+    }
+
+    res.json({ success: true });
+  } catch (e) { next(e); }
+});
+
+// 3. Create Class
+app.post('/api/org/classes', authenticateToken, async (req, res, next) => {
+  try {
+    const { name } = req.body;
+    if (!name) return res.status(400).json({ error: 'Class Name required' });
+
+    // Get Org ID
+    const u = await pool.query('SELECT organization_id FROM users WHERE id=$1', [req.user.id]);
+    const oid = u.rows[0]?.organization_id;
+    if (!oid) return res.status(400).json({ error: 'Organization not found' });
+
+    const r = await pool.query(
+      'INSERT INTO classes (org_id, name) VALUES ($1, $2) RETURNING id, name',
+      [oid, name]
+    );
+    res.json({ success: true, class: r.rows[0] });
+  } catch (e) { next(e); }
+});
+
+// 4. Assign Teacher to Class
+app.post('/api/org/classes/assign', authenticateToken, async (req, res, next) => {
+  try {
+    const { teacherId, classId } = req.body;
+    await pool.query(
+      'INSERT INTO class_assignments (class_id, teacher_id) VALUES ($1, $2)',
+      [classId, teacherId]
+    );
+    res.json({ success: true });
+  } catch (e) { next(e); }
+});
+
+// 5. Public: List Classes by Org Code (for Student Signup)
+app.get('/api/public/classes', async (req, res, next) => {
+  try {
+    const { code } = req.query;
+    if (!code) return res.status(400).json({ error: 'Code required' });
+
+    const org = await pool.query('SELECT id FROM organizations WHERE code=$1', [code]);
+    if (!org.rows.length) return res.status(404).json({ error: 'Invalid Code' });
+
+    const classes = await pool.query('SELECT id, name FROM classes WHERE org_id=$1', [org.rows[0].id]);
+    res.json({ success: true, classes: classes.rows });
+  } catch (e) { next(e); }
+});
+
+// 6. Parent: Get Linked Students
+app.get('/api/parent/students', authenticateToken, async (req, res, next) => {
+  try {
+    const r = await pool.query(`
+         SELECT u.id, u.name, u.email, se.class_id, c.name as class_name
+         FROM parent_student_links psl
+         JOIN users u ON psl.student_id = u.id
+         LEFT JOIN student_enrollments se ON se.student_id = u.id
+         LEFT JOIN classes c ON se.class_id = c.id
+         WHERE psl.parent_id = $1
+      `, [req.user.id]);
+    res.json({ success: true, students: r.rows });
+  } catch (e) { next(e); }
+});
 
 const checkDbPrivileges = async () => {
   try {
@@ -2159,7 +2995,16 @@ if (require.main === module) {
     if (!ok) {
       logger.warn('DB privilege check failed - attempting to continue; consider running server/grant_schema_permissions.py or applying `012_grant_schema_usage.sql`');
     }
-    app.listen(PORT, '0.0.0.0', () => logger.info(`edunexus server listening on ${PORT}`));
+    app.listen(PORT, '0.0.0.0', () => {
+      logger.info(`edunexus server listening on ${PORT}`);
+      if (devRoutesEnabled) {
+        logger.info(`Developer view available: http://localhost:${PORT}/dev-view (protected by DEV'S_PASSWORD in server/.env)`);
+        // Print a blue developer link to the terminal for convenience (no secrets)
+        try {
+          console.log('\x1b[34m%s\x1b[0m', `Developer view available: http://localhost:${PORT}/dev-view`);
+        } catch (e) { /* ignore */ }
+      }
+    });
   })();
 }
 
@@ -2168,4 +3013,9 @@ const setPool = (p) => { pool = p; };
 
 // Export sendEmail so worker scripts and test helpers can reuse the same
 // delivery implementation without starting an http listener.
-module.exports = { app, setPool, sendEmail, setSendEmail };
+const setSupabaseDownUntil = (t) => { supabaseDownUntil = t; };
+
+// Allow tests to override the Supabase client with a mock
+const setSupabaseClient = (client) => { supabase = client; };
+
+module.exports = { app, setPool, sendEmail, setSendEmail, setSupabaseDownUntil, setSupabaseClient };

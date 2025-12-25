@@ -9,6 +9,8 @@ const OUTBOX_FILE = path.join(DATA_DIR, 'outbox.json');
 const QUEUE_FILE = path.join(DATA_DIR, 'signup_queue_disk.json');
 const ORG_REQUESTS_FILE = path.join(DATA_DIR, 'org_code_requests_disk.json');
 const INBOUND_FILE = path.join(DATA_DIR, 'inbound.json');
+const SUPABASE_SYNC_FILE = path.join(DATA_DIR, 'supabase_sync_queue.json');
+if (!fs.existsSync(SUPABASE_SYNC_FILE)) fs.writeFileSync(SUPABASE_SYNC_FILE, '[]', 'utf8');
 
 const readJsonFile = (file) => {
   try {
@@ -228,6 +230,83 @@ async function processSignupQueueOnce() {
   return { processed };
 }
 
+async function processSupabaseSyncQueueOnce() {
+  const queue = readJsonFile(SUPABASE_SYNC_FILE);
+  if (!Array.isArray(queue) || queue.length === 0) return { processed: 0 };
+  let processed = 0;
+  try {
+    if (!process.env.SUPABASE_URL || !(process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY)) {
+      logger.info('Supabase not configured; skipping supabase sync queue');
+      return { processed: 0 };
+    }
+    const { createClient } = require('@supabase/supabase-js');
+    const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY);
+
+    for (const item of queue.slice()) {
+      try {
+        if (item.action === 'create_user') {
+          const payload = item.payload || {};
+          // Attempt to create auth user (admin create preferred)
+          let createdUser = null;
+          try {
+            if (supabase.auth && supabase.auth.admin && typeof supabase.auth.admin.createUser === 'function') {
+              const r = await supabase.auth.admin.createUser({ email: payload.email, password: payload.password || Math.random().toString(36).slice(2) + 'A1!', user_metadata: { name: payload.name, role: payload.role } });
+              createdUser = r?.user || r;
+            }
+          } catch (e) {
+            logger.warn('Supabase sync createUser admin failed', e?.message || e);
+          }
+          if (!createdUser) {
+            try {
+              const r = await supabase.auth.signUp({ email: payload.email, password: payload.password || Math.random().toString(36).slice(2) + 'A1!' });
+              createdUser = r?.data?.user || r;
+            } catch (e) {
+              logger.warn('Supabase sync signUp failed', e?.message || e);
+              throw e;
+            }
+          }
+
+          const userId = createdUser && createdUser.id ? createdUser.id : payload.id;
+          const { error: uErr } = await supabase.from('users').insert({ id: userId, name: payload.name || 'Unknown', email: payload.email, role: payload.role || 'Management', extra: payload.extra || {}, password_hash: payload.password_hash || 'queued_sync' });
+          if (uErr) throw uErr;
+
+          // Insert role-specific row
+          if ((payload.role || '').toLowerCase() === 'management') {
+            const { error: rErr } = await supabase.from('management_managers').insert({ user_id: userId, name: payload.name, email: payload.email, role: 'Manager' });
+            if (rErr) throw rErr;
+          } else if ((payload.role || '').toLowerCase() === 'teacher') {
+            const { error: tErr } = await supabase.from('teachers').insert({ user_id: userId, title: payload.extra?.title, department: payload.extra?.department, institute_id: payload.extra?.instituteId, class_id: payload.extra?.classId, is_verified: false, status: 'pending' });
+            if (tErr) throw tErr;
+          }
+
+          item.processed = true;
+          processed++;
+        } else if (item.action === 'create_role_row') {
+          const payload = item.payload || {};
+          const table = payload.table;
+          if (!table) throw new Error('Missing table for create_role_row');
+          const { error } = await supabase.from(table).insert(payload.data || {});
+          if (error) throw error;
+          item.processed = true;
+          processed++;
+        } else {
+          logger.warn('Unknown supabase sync action', item.action);
+          item.processed = true; // drop unknown actions
+        }
+      } catch (e) {
+        item.attempts = (item.attempts || 0) + 1;
+        logger.warn('Failed to process supabase queue item', e?.message || e);
+      }
+    }
+
+    const keep = queue.filter(i => !i.processed && (i.attempts || 0) < 10);
+    writeJsonFile(SUPABASE_SYNC_FILE, keep);
+  } catch (e) {
+    logger.warn('Error processing supabase sync queue', e?.message || e);
+  }
+  return { processed };
+}
+
 let db = require('./db');
 const setDb = (d) => { db = d; };
 
@@ -285,7 +364,7 @@ async function processOrgRequestsOnce() {
 
 // ...
 
-module.exports = { processOutboxOnce, processSignupQueueOnce, processInboxOnce, processOrgRequestsOnce, processInboundCommandsOnce, runOnce, runLoop, appendOutbox, appendInbound, setSendEmail, setDb };
+module.exports = { processOutboxOnce, processSignupQueueOnce, processSupabaseSyncQueueOnce, processInboxOnce, processOrgRequestsOnce, processInboundCommandsOnce, runOnce, runLoop, appendOutbox, appendInbound, setSendEmail, setDb };
 
 // process inbound mailbox messages that may contain confirmation/rejection commands
 async function processInboundCommandsOnce() {
