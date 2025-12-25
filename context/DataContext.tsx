@@ -4,6 +4,10 @@ import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 import { Document, Packer, Paragraph, Table, TableRow, TableCell, TextRun } from 'docx';
 import { LoggedInUser, Class, Message, Teacher, Student, Parent, Dean, UserRole, Task, StudentTask, Mark, AttendanceRecord, Department, TeacherTitle, TeacherExtended } from '../types';
+import { getPythonApiUrl, getApiUrl } from '../utils/config';
+
+// Local alias to ensure TypeScript recognizes the imported helper in this module
+const getApiUrlLocal = getApiUrl;
 
 // NOTE: This DataContext no longer initializes from a large mock dataset.
 // It intentionally starts empty so the app acts like a real application where
@@ -143,7 +147,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     // attempt to contact the backend by default.
     if (typeof window === 'undefined' || process.env.NODE_ENV === 'test') return;
     const fetchDashboardData = async () => {
-      const apiUrl = (import.meta as any).env?.VITE_API_URL || 'http://localhost:4000';
+      const apiUrl = getApiUrlLocal();
       try {
         const resp = await fetch(`${apiUrl}/api/dashboard-data`, {
           headers: { 'Content-Type': 'application/json' },
@@ -286,7 +290,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setPendingManagementSignups(prev => [item, ...prev]);
 
     // Attempt server-side persistence (best effort)
-    const apiUrl = (import.meta as any).env?.VITE_API_URL || 'http://localhost:4000';
+    const apiUrl = getApiUrlLocal();
     fetch(`${apiUrl}/api/queue-signup`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -327,10 +331,10 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const item = pendingManagementSignups.find(p => p.id === id);
     if (!item) return false;
 
-    // Use Python Service
-    const pythonUrl = `http://${window.location.hostname}:8000`; // Dynamically use localhost:8000
+    // Use Node Service
+    const apiUrl = getApiUrlLocal();
     try {
-      const resp = await fetch(`${pythonUrl}/api/py/signup`, {
+      const resp = await fetch(`${apiUrl}/api/py/signup`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: item.name || undefined, email: item.email, password: item.password, role: 'Management', extra: item.extra || {} })
@@ -408,7 +412,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   useEffect(() => {
     // Sync Pending Departments
     if (pendingDepartments.length > 0) {
-      const apiUrl = (import.meta as any).env?.VITE_API_URL || 'http://localhost:4000';
+      const apiUrl = getApiUrlLocal();
       pendingDepartments.forEach(async (dept) => {
         try {
           const resp = await fetch(`${apiUrl}/api/departments`, {
@@ -436,7 +440,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     // Sync Pending Classes
     if (pendingClasses.length > 0) {
-      const apiUrl = (import.meta as any).env?.VITE_API_URL || 'http://localhost:4000';
+      const apiUrl = getApiUrlLocal();
       pendingClasses.forEach(async (cls) => {
         try {
           // Clean payload: avoid sending undefined/null fields which some servers
@@ -472,7 +476,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     if (!pendingManagementSignups || pendingManagementSignups.length === 0) return;
 
-    const apiUrl = (import.meta as any).env?.VITE_API_URL || 'http://localhost:4000';
+    const apiUrl = getApiUrlLocal();
 
     let aborted = false;
 
@@ -943,7 +947,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     // Optimistic Update
     setDepartments(prev => [...prev, newDept]);
 
-    const apiUrl = (import.meta as any).env?.VITE_API_URL || 'http://localhost:4000';
+    const apiUrl = getApiUrlLocal();
     try {
       const resp = await fetch(`${apiUrl}/api/departments`, {
         method: 'POST',
@@ -979,7 +983,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     // Optimistic Update
     setClasses(prev => [...prev, newClass]);
 
-    const apiUrl = (import.meta as any).env?.VITE_API_URL || 'http://localhost:4000';
+    const apiUrl = getApiUrlLocal();
     try {
       const resp = await fetch(`${apiUrl}/api/classes`, {
         method: 'POST',
@@ -1169,7 +1173,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   // Management code workflow - management requests a new code be created.
   // This sends a confirmation email to the developer (storageeapp@gmail.com).
   const createOrgCodeRequest = async (data: { orgType: 'school' | 'institute'; instituteId?: string; managementEmail: string }) => {
-    const apiUrl = (import.meta as any).env?.VITE_API_URL || 'http://localhost:4000';
+    const apiUrl = getApiUrlLocal();
     try {
       const resp = await fetch(`${apiUrl}/api/org-code/request`, {
         method: 'POST',
@@ -1235,7 +1239,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       return { success: true as const, code };
     }
 
-    const apiUrl = (import.meta as any).env?.VITE_API_URL || 'http://localhost:4000';
+    const apiUrl = getApiUrlLocal();
     try {
       const resp = await fetch(`${apiUrl}/api/org-code/confirm/${token}`, {
         method: 'POST',
@@ -1281,7 +1285,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const pending = pendingCodeRequestsRef.current.find(p => p.token === tokenOrId || p.id === tokenOrId) || pendingCodeRequests.find(p => p.token === tokenOrId || p.id === tokenOrId);
     if (!pending) return false;
 
-    const apiUrl = (import.meta as any).env?.VITE_API_URL || 'http://localhost:4000';
+    const apiUrl = getApiUrlLocal();
     (async () => {
       try {
         const resp = await fetch(`${apiUrl}/api/org-code/reject/${pending.token}`, {
@@ -1318,7 +1322,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const viewOrgCode = async (password: string, orgType: 'school' | 'institute') => {
-    const apiUrl = (import.meta as any).env?.VITE_API_URL || 'http://localhost:4000';
+    const apiUrl = getApiUrlLocal();
     try {
       const resp = await fetch(`${apiUrl}/api/org-code/view`, {
         method: 'POST',

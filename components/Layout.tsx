@@ -4,6 +4,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import axios from 'axios';
 import ThemeSwitcher from './ThemeSwitcher';
 import { useData } from '../context/DataContext';
+import { getApiUrl } from '../utils/config';
 import Modal from './ui/Modal';
 import Input from './ui/Input';
 import Button from './ui/Button';
@@ -56,7 +57,8 @@ const Layout: React.FC<LayoutProps> = ({
     setRetryLoading(true);
     setRecoveryError('');
     try {
-      const res = await axios.post(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/py/restore-dashboard-state`, { user_id: user?.id });
+      const apiUrl = getApiUrl();
+      const res = await axios.post(`${apiUrl}/api/py/restore-dashboard-state`, { user_id: user?.id });
       if (res.data.success) {
         // Success - Close modal and proceed
         setShowRecoveryModal(false);

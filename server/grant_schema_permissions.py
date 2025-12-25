@@ -19,9 +19,14 @@ try:
         "GRANT ALL ON ALL TABLES IN SCHEMA public TO service_role;",
         "GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO service_role;",
         "GRANT ALL ON ALL ROUTINES IN SCHEMA public TO service_role;",
-        
-        # Also ensure postgres has it (it should)
-        "GRANT ALL ON SCHEMA public TO postgres;" 
+
+        # Also grant authenticated and anon minimal schema usage and sequence/table select rights
+        "GRANT USAGE ON SCHEMA public TO authenticated;",
+        "GRANT USAGE ON SCHEMA public TO anon;",
+        "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO authenticated;",
+        "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO anon;",
+        "GRANT SELECT ON ALL TABLES IN SCHEMA public TO authenticated;",
+        "GRANT SELECT ON ALL TABLES IN SCHEMA public TO anon;",
     ]
 
     for sql in sqls:

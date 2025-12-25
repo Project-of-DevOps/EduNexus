@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
+import { getApiUrl } from '../utils/config';
 
 type VerificationStatus = 'loading' | 'success' | 'error' | 'expired';
 
@@ -20,7 +21,8 @@ const VerifyEmailPage: React.FC = () => {
       }
 
       try {
-        const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:4000'}/api/verify-email`, {
+        const apiUrl = getApiUrl();
+        const response = await fetch(`${apiUrl}/api/verify-email`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ token }),

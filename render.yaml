@@ -1,0 +1,54 @@
+services:
+  - type: web
+    name: edunexus-python-service
+    env: python
+    buildCommand: pip install -r server/python_service/requirements.txt
+    startCommand: uvicorn server.python_service.main:app --host 0.0.0.0 --port 10000
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+
+  # 2. Node.js Backend Service
+  - type: web
+    name: edunexus-node-service
+    env: node
+    region: singapore
+    plan: free
+    buildCommand: npm install
+    startCommand: node server/index.js
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: PORT
+        value: 10000
+
+  # 3. Frontend Static Site
+  - type: static
+    name: edunexus-frontend
+    env: static
+    region: singapore
+    buildCommand: npm install && npm run build
+    publishDir: dist
+    envVars:
+      - key: VITE_PYTHON_API_URL
+        fromService:
+          type: web
+          name: edunexus-python-service
+          property: url
+      - key: VITE_API_URL
+        fromService:
+          type: web
+          name: edunexus-node-service
+          property: url
+      - key: VITE_SUPABASE_URL
+        sync: false
+      - key: VITE_SUPABASE_ANON_KEY
+        sync: false

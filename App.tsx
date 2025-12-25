@@ -20,6 +20,10 @@ import ManagementSignups from './pages/ManagementSignups';
 import ConfirmCodePage from './pages/ConfirmCodePage';
 import DevNotificationPopup from './components/DevNotificationPopup';
 import Dashboard from './pages/Dashboard';
+import SignupTeacher from './pages/SignupTeacher';
+import SignupStudent from './pages/SignupStudent';
+import SignupParent from './pages/SignupParent';
+
 
 const App: React.FC = () => {
   return (
@@ -39,9 +43,16 @@ const App: React.FC = () => {
               <Route path="/login/management" element={<Navigate to="/login" replace />} />
               <Route path="/login/librarian" element={<Navigate to="/login" replace />} />
               <Route path="/activate" element={<Activate />} />
+
               <Route path="/verify-email/:token" element={<VerifyEmailPage />} />
 
+              {/* Strict Signup Routes */}
+              <Route path="/signup/teacher" element={<div className="min-h-screen bg-gray-100 flex items-center justify-center py-12 sm:px-6 lg:px-8"><SignupTeacher /></div>} />
+              <Route path="/signup/student" element={<div className="min-h-screen bg-gray-100 flex items-center justify-center py-12 sm:px-6 lg:px-8"><SignupStudent /></div>} />
+              <Route path="/signup/parent" element={<div className="min-h-screen bg-gray-100 flex items-center justify-center py-12 sm:px-6 lg:px-8"><SignupParent /></div>} />
+
               <Route path="/dashboard" element={
+
                 <ProtectedRoute>
                   <Dashboard />
                 </ProtectedRoute>

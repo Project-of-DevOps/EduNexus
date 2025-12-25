@@ -1,0 +1,30 @@
+[
+  {
+    "id": "supa_1766667679376",
+    "action": "create_user",
+    "payload": {
+      "id": "de034c86-018d-45c7-8940-d28415b27a97",
+      "name": "Test Signup",
+      "email": "test_signup_1766667675063@test.local",
+      "role": "Management"
+    },
+    "localUserId": "de034c86-018d-45c7-8940-d28415b27a97",
+    "attempts": 0,
+    "status": "queued",
+    "createdAt": "2025-12-25T13:01:19.376Z"
+  },
+  {
+    "id": "supa_1766667615790",
+    "action": "create_user",
+    "payload": {
+      "id": "82fc76d5-2cae-4ba4-a28e-b3e82f078376",
+      "name": "Test Signup",
+      "email": "test_signup_1766667609383@test.local",
+      "role": "Management"
+    },
+    "localUserId": "82fc76d5-2cae-4ba4-a28e-b3e82f078376",
+    "attempts": 0,
+    "status": "queued",
+    "createdAt": "2025-12-25T13:00:15.790Z"
+  }
+]

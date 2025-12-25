@@ -13,10 +13,11 @@ const createPool = () => {
     try {
         const connectionString = process.env.DATABASE_URL;
         // Use Pool for better connection management in a server environment
+        const useSsl = (process.env.DB_SSL === 'true') || (connectionString && connectionString.includes('sslmode=require')) || (process.env.NODE_ENV === 'production');
         const poolConfig = {
             connectionString,
             connectionTimeoutMillis: 30000,
-            ssl: { rejectUnauthorized: false } // Required for Supabase usually, verify if problematic locally
+            ssl: useSsl ? { rejectUnauthorized: false } : false
         };
         // If specific parsing is needed, we can do it, but connectionString usually suffices for pg
         return new Pool(poolConfig);
@@ -32,6 +33,10 @@ const pool = createPool();
 if (pool && typeof pool.on === 'function') {
     pool.on('error', (err) => {
         console.error('Unexpected DB client error', err?.message || err);
+        // Provide actionable guidance for auth errors
+        if (err && err.code === '28P01') {
+            console.error('Database authentication failed. Verify DATABASE_URL (user/password) and that the Postgres server is reachable. If using Render, set DATABASE_URL via the dashboard; locally, update server/.env');
+        }
         // Use process.stderr to ensure visibility in hosting environments
         try { process.stderr.write(`DB client error: ${String(err?.message || err)}\n`); } catch (e) { /* ignore */ }
     });
