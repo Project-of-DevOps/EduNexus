@@ -192,15 +192,15 @@ app.get('/health', (req, res) => {
 // Request Logging Middleware
 app.use((req, res, next) => {
   logger.info(`${req.method} ${req.url}`);
-  
+
   // FORCE PERMISSIVE CSP globally for this dev session to fix the user's issue
   if (devRoutesEnabled) {
-      res.setHeader(
-        'Content-Security-Policy', 
-        "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'sha256-rgXc7+5IO+wiNQP5biAiXjAPSzz0noyYqjNku70bdbo='; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https:; frame-ancestors 'none';"
-      );
+    res.setHeader(
+      'Content-Security-Policy',
+      "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'sha256-rgXc7+5IO+wiNQP5biAiXjAPSzz0noyYqjNku70bdbo='; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https:; frame-ancestors 'none';"
+    );
   }
-  
+
   next();
 });
 
@@ -270,6 +270,18 @@ if (devRoutesEnabled) {
 
   const devSessions = new Map();
   const generateToken = () => crypto.randomBytes(16).toString('hex');
+
+  const ensureDevAuth = (req, res, next) => {
+    const token = req.cookies ? req.cookies['dev-auth'] : null;
+    if (!token || !devSessions.has(token) || devSessions.get(token) < Date.now()) {
+      if (req.headers['accept'] && req.headers['accept'].includes('application/json')) {
+        return res.status(401).json({ error: 'Unauthorized', redirect: '/dev-view' });
+      }
+      return res.redirect('/dev-view');
+    }
+    devSessions.set(token, Date.now() + 60 * 60 * 1000);
+    next();
+  };
 
   // Simple login / setup page
   app.get('/dev-view', (req, res) => {
