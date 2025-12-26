@@ -89,7 +89,7 @@ router.post('/signup/teacher-request', async (req, res) => {
 
 // 2. Student Signup
 router.post('/signup/student', async (req, res) => {
-    const { username, password, org_code, class_id } = req.body;
+    const { username, password, org_code, class_id, name } = req.body;
 
     try {
         // Validate Code
@@ -99,11 +99,12 @@ router.post('/signup/student', async (req, res) => {
 
         // Prepare Email
         const email = username.includes('@') ? username : `${username}@student.edu`;
+        const actualName = name || username;
 
         // Create Auth User
         let userId;
         try {
-            userId = await createAuthUser(email, password, { name: username, role: 'student' });
+            userId = await createAuthUser(email, password, { name: actualName, role: 'student' });
         } catch (e) {
             if (e.message.includes('already registered')) return res.status(409).json({ error: 'Account already exists.' });
             throw e;
@@ -113,7 +114,7 @@ router.post('/signup/student', async (req, res) => {
             await db.pool.query(
                 `INSERT INTO users (id, email, name, role, username, password_hash, supabase_user_id) 
                  VALUES ($1, $2, $3, 'student', $4, 'supabase_managed', $1)`,
-                [userId, email, username, username]
+                [userId, email, actualName, username]
             );
         } catch (dbErr) {
             if (dbErr.code === '23505') return res.status(409).json({ error: 'Account already exists.' });

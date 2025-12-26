@@ -3,10 +3,11 @@ foreach ($port in $ports) {
     $processes = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
     if ($processes) {
         Write-Host "Killing processes on port $port : $processes"
-        foreach ($pid in $processes) {
-            Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+        foreach ($processId in $processes) {
+            Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
         }
-    } else {
+    }
+    else {
         Write-Host "No process found on port $port"
     }
 }

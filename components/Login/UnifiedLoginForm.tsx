@@ -409,11 +409,9 @@ const UnifiedLoginForm: React.FC<{ defaultRole?: UserRole; prefill?: Prefill }> 
         const pErr = validatePassword(password);
         if (pErr) return pErr;
 
-        // Unique ID required for Login (except Librarian/Management) and Signup (except Librarian/Management/StudentWithCode/ParentWithCode)
+        // Unique ID required for Signup (except Librarian/Management/StudentWithCode/ParentWithCode)
         const needsUniqueId = activeRole !== UserRole.Librarian && activeRole !== UserRole.Management;
-        if (needsUniqueId && !uniqueId.trim() && isLogin) {
-            return 'Unique ID is required.';
-        }
+        // Removed checking needsUniqueId && !uniqueId.trim() && isLogin because Unique ID is hidden during login
         if (needsUniqueId && !uniqueId.trim() && !isLogin && !accessCode.trim()) {
             return 'Unique ID is required.';
         }

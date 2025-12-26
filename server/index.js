@@ -475,51 +475,232 @@ if (devRoutesEnabled) {
         }
       }
 
-      let html = `<!doctype html><html><head><meta charset="utf-8"><title>Dev View - Users</title><style>body{font-family:system-ui,Segoe UI,Roboto,Arial;padding:12px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f5f5f5}pre{max-width:420px;white-space:pre-wrap}.small{font-size:13px;color:#666}.delete-btn{background:#e53935;color:#fff;border:none;padding:6px 10px;border-radius:6px;cursor:pointer;font-weight:600;margin-left:6px;display:inline-block}.delete-btn:hover{background:#c62828}.delete-btn.small{padding:4px 6px;font-size:12px}.delete-inline{margin-left:8px;color:#c00}</style></head><body>`;
-      html += `<h2>Developer User View</h2><p><a href="/dev-view/data">Refresh</a> • <a href="/dev-view/data?refresh=1">Refresh from Supabase</a> • <a href="/dev-view/logout">Logout</a> • <a href="/dev-view">Home</a> • <button id="process-supa-queue" style="margin-left:8px;padding:6px 10px;border-radius:6px;border:1px solid #ddd;background:#fff;cursor:pointer">Process Supabase Sync Queue</button></p>`;
-      if (supaNote) html += `<div style="margin:8px 0;padding:10px;border-radius:6px;background:#f7f7f7;border:1px solid #eee">${escapeHtml(supaNote)}</div>`;
-      html += `<div class="small">Data source: ${usedSupabase ? 'Supabase snapshot' : 'Local DB'}</div>`;
-
-      // Status panel
-      html += `<div style="margin:8px 0;padding:10px;border-radius:6px;background:#fff;color:#333;border:1px solid #eee;display:flex;gap:12px;align-items:center;flex-wrap:wrap">`;
-      html += `<div><strong>Dev session:</strong> ${token ? '<span style="color:green">active</span>' : '<span style="color:#999">not set</span>'}</div>`;
-      html += `<div><strong>Local users:</strong> ${localUserCount}</div>`;
-      html += `<div><strong>Last local user:</strong> ${lastUser ? escapeHtml(lastUser.email || lastUser.id + '') + (lastUser.created_at ? ' (' + escapeHtml(String(lastUser.created_at)) + ')' : '') : 'none'}</div>`;
-      html += `<div><strong>Supabase reachable:</strong> ${supaAvailable ? '<span style="color:green">yes</span>' : '<span style="color:#999">no</span>'}${supaPingError ? ' — ' + escapeHtml(supaPingError) : ''}</div>`;
-      html += `</div>`;
-
-      // Users table (with delete buttons)
-      html += `<h3>Users</h3><table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Organization</th><th>Extra</th><th>Children</th><th>Actions</th></tr></thead><tbody>`;
-      for (const u of rows) {
-        html += `<tr><td>${escapeHtml(u.name || u.email)}</td><td>${escapeHtml(u.email)}</td><td>${escapeHtml(u.role)}</td><td>${escapeHtml(u.orgName)}</td><td><pre>${escapeHtml(JSON.stringify(u.extra, null, 2))}</pre></td><td>${escapeHtml((u.children || []).join(', '))}</td><td><button class="delete-btn" data-type="user" data-id="${escapeHtml(u.id)}">❌ Delete</button></td></tr>`;
-      }
-      html += `</tbody></table>`;
-
-      // Organizations and members (with delete for org)
-      html += `<h3>Organizations</h3>`;
-      for (const o of orgsRes.rows) {
-        html += `<div style="margin-bottom:12px;padding:8px;border:1px solid #eee;border-radius:6px;position:relative"><strong>${escapeHtml(o.name)}</strong> <button class="delete-btn" data-type="org" data-id="${escapeHtml(o.id)}" style="position:absolute;right:12px;top:10px">❌ Delete Org</button><div style="font-size:12px;color:#666">Members:</div>`;
-        const mems = orgMembersMap[o.id] || [];
-        if (!mems.length) html += `<div style="font-size:13px;color:#999">(none)</div>`;
-        else {
-          html += `<ul style="margin:6px 0;padding-left:18px">`;
-          for (const m of mems) html += `<li>${escapeHtml(m.name)} — ${escapeHtml(m.role)} ${m.title ? '(' + escapeHtml(m.title) + ')' : ''} ${m.status ? '[' + escapeHtml(m.status) + ']' : ''} <button class="delete-btn small" data-type="org_member" data-id="${escapeHtml(m.id)}">❌ Remove</button></li>`;
-          html += `</ul>`;
+      // --- TAILWIND STYLED HTML ---
+      let html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nexus Developer View</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            ocean: {
+              900: '#0f172a', // Slate 900
+              800: '#1e293b', // Slate 800
+              700: '#334155', // Slate 700
+              600: '#475569', // Slate 600
+              500: '#64748b', // Slate 500
+              accent: '#38bdf8', // Sky 400
+            }
+          }
         }
-        html += `</div>`;
       }
+    }
+  </script>
+  <style>
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #475569; }
+    body { font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+  </style>
+</head>
+<body class="bg-ocean-900 text-gray-200 min-h-screen p-6">
 
-      // Classes
-      html += `<h3>Classes</h3><table><thead><tr><th>Class</th><th>Organization</th><th>Actions</th></tr></thead><tbody>`;
-      for (const id in classMap) {
-        const c = classMap[id];
-        html += `<tr><td>${escapeHtml(c.name)}</td><td>${escapeHtml(c.orgName)}</td><td><button class="delete-btn" data-type="class" data-id="${escapeHtml(c.id)}">❌ Delete</button></td></tr>`;
-      }
-      html += `</tbody></table>`;
+  <!-- Header -->
+  <header class="max-w-7xl mx-auto mb-8 flex justify-between items-center bg-ocean-800 p-6 rounded-xl shadow-lg border border-ocean-700">
+    <div>
+      <h2 class="text-3xl font-bold text-white tracking-tight flex items-center">
+        <span class="text-ocean-accent mr-3">⚡</span> Developer Console
+      </h2>
+      <p class="text-ocean-500 text-sm mt-1">Direct Database Access & Management</p>
+    </div>
+    <div class="flex gap-4 items-center text-sm font-medium">
+      <a href="/dev-view/data" class="px-4 py-2 bg-ocean-700 hover:bg-ocean-600 rounded-lg transition-colors flex items-center gap-2">
+        🔄 Refresh
+      </a>
+      ${isSupabaseAvailable() ? `
+      <a href="/dev-view/data?refresh=1" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg transition-colors text-white shadow-md">
+         Wait & Sync Supabase
+      </a>` : ''}
+       <button id="process-supa-queue" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg transition-colors text-white shadow-md">
+        Process Queue
+      </button>
+      <a href="/dev-view/logout" class="px-4 py-2 text-red-400 hover:text-red-300 transition-colors ml-4 border border-transparent hover:border-red-900/50 rounded-lg">
+        Logout
+      </a>
+      <a href="/dev-view" class="px-4 py-2 bg-ocean-700 hover:bg-ocean-600 rounded-lg transition-colors">
+        Home
+      </a>
+    </div>
+  </header>
 
-      html += `<script src="/dev-view/script.js"></script>`;
+  <!-- Metrics -->
+  <div class="max-w-7xl mx-auto mb-8 grid grid-cols-1 md:grid-cols-4 gap-6">
+    <div class="bg-ocean-800 p-5 rounded-xl border border-ocean-700 shadow-lg">
+       <h4 class="text-ocean-500 text-xs font-bold uppercase tracking-wider mb-2">Total Users</h4>
+       <div class="text-3xl font-bold text-white">${localUserCount}</div>
+    </div>
+    <div class="bg-ocean-800 p-5 rounded-xl border border-ocean-700 shadow-lg">
+       <h4 class="text-ocean-500 text-xs font-bold uppercase tracking-wider mb-2">Supabase Status</h4>
+       <div class="flex items-center gap-2">
+         <span class="h-3 w-3 rounded-full ${supaAvailable ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]' : 'bg-red-500'}"></span>
+         <span class="text-lg font-medium text-gray-200">${supaAvailable ? 'Connected' : 'Disconnected'}</span>
+       </div>
+       ${supaPingError ? `<div class="text-xs text-red-400 mt-1 truncate" title="${escapeHtml(supaPingError)}">${escapeHtml(supaPingError)}</div>` : ''}
+    </div>
+    <div class="bg-ocean-800 p-5 rounded-xl border border-ocean-700 shadow-lg col-span-2">
+       <h4 class="text-ocean-500 text-xs font-bold uppercase tracking-wider mb-2">Last Registered User</h4>
+       ${lastUser ? `
+       <div class="flex items-center justify-between">
+          <div class="text-sm">
+            <div class="font-medium text-white">${escapeHtml(lastUser.email)}</div>
+            <div class="text-ocean-500 text-xs">${new Date(lastUser.created_at).toLocaleString()}</div>
+          </div>
+          <div class="text-xs px-2 py-1 bg-ocean-900 rounded border border-ocean-600 font-mono text-ocean-accent">
+            ID: ${lastUser.id}
+          </div>
+       </div>` : '<div class="text-gray-500 italic">No users yet</div>'}
+    </div>
+  </div>
 
-      html += `</body></html>`;
+  <main class="max-w-7xl mx-auto space-y-10 pb-20">
+
+    <!-- Users Table -->
+    <section class="bg-ocean-800 rounded-xl shadow-xl overflow-hidden border border-ocean-700">
+      <div class="p-6 border-b border-ocean-700 flex justify-between items-center">
+        <h3 class="text-xl font-bold text-white flex items-center gap-2">
+          👤 Users
+          <span class="px-2 py-0.5 bg-ocean-900 text-ocean-500 text-xs rounded-full border border-ocean-700">${rows.length}</span>
+        </h3>
+      </div>
+      <div class="overflow-x-auto max-h-[600px]">
+        <table class="w-full text-left text-sm whitespace-nowrap">
+          <thead class="bg-ocean-900/50 sticky top-0 z-10 backdrop-blur-sm">
+            <tr>
+              <th class="p-4 font-semibold text-ocean-500 uppercase tracking-wider text-xs">Name / Email</th>
+              <th class="p-4 font-semibold text-ocean-500 uppercase tracking-wider text-xs">Role</th>
+              <th class="p-4 font-semibold text-ocean-500 uppercase tracking-wider text-xs">Organization</th>
+              <th class="p-4 font-semibold text-ocean-500 uppercase tracking-wider text-xs">Details</th>
+              <th class="p-4 font-semibold text-ocean-500 uppercase tracking-wider text-xs text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-ocean-700/50">
+            ${rows.map(u => {
+        const roleColor = u.role === 'Student' ? 'text-emerald-400' :
+          u.role === 'Teacher' ? 'text-amber-400' :
+            u.role === 'Management' ? 'text-purple-400' :
+              u.role === 'Parent' ? 'text-rose-400' : 'text-blue-400';
+
+        let details = '';
+        if (u.children && u.children.length) details += `<div class="text-xs text-gray-400">Children: ${u.children.join(', ')}</div>`;
+        if (u.extra && u.extra.title) details += `<div class="text-xs text-gray-400">${u.extra.title}</div>`;
+
+        return `
+              <tr class="hover:bg-ocean-700/30 transition-colors group">
+                <td class="p-4">
+                  <div class="font-medium text-white">${escapeHtml(u.name)}</div>
+                  <div class="text-ocean-500 text-xs">${escapeHtml(u.email)}</div>
+                  <div class="text-[10px] text-ocean-600 font-mono mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity">${u.id}</div>
+                </td>
+                <td class="p-4">
+                  <span class="px-2 py-1 rounded-md bg-ocean-900/80 border border-ocean-700/50 font-medium ${roleColor} text-xs">
+                    ${escapeHtml(u.role)}
+                  </span>
+                </td>
+                 <td class="p-4 text-gray-300">
+                    ${escapeHtml(u.orgName) || '<span class="text-ocean-600 italic">None</span>'}
+                 </td>
+                 <td class="p-4">
+                    ${details}
+                 </td>
+                 <td class="p-4 text-right">
+                    <button class="delete-btn px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 border border-red-500/20 rounded-lg text-xs font-medium transition-all" data-type="user" data-id="${u.id}">
+                      Delete
+                    </button>
+                 </td>
+              </tr>`;
+      }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Organizations Table -->
+    <section class="bg-ocean-800 rounded-xl shadow-xl overflow-hidden border border-ocean-700">
+       <div class="p-6 border-b border-ocean-700 flex justify-between items-center">
+        <h3 class="text-xl font-bold text-white flex items-center gap-2">
+          🏢 Organizations
+          <span class="px-2 py-0.5 bg-ocean-900 text-ocean-500 text-xs rounded-full border border-ocean-700">${orgsRes.rows.length}</span>
+        </h3>
+       </div>
+       <div class="overflow-x-auto">
+         <table class="w-full text-left text-sm">
+            <thead class="bg-ocean-900/50">
+              <tr>
+                 <th class="p-4 font-semibold text-ocean-500 uppercase tracking-wider text-xs">Name</th>
+                 <th class="p-4 font-semibold text-ocean-500 uppercase tracking-wider text-xs">Classes</th>
+                 <th class="p-4 font-semibold text-ocean-500 uppercase tracking-wider text-xs">Members</th>
+                 <th class="p-4 font-semibold text-ocean-500 uppercase tracking-wider text-xs text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-ocean-700/50">
+               ${orgsRes.rows.map(o => {
+        const classes = classesRes.rows.filter(c => c.org_id === o.id);
+        const members = orgMembersMap[o.id] || [];
+        return `
+                 <tr class="hover:bg-ocean-700/30 transition-colors">
+                    <td class="p-4 font-medium text-white">${escapeHtml(o.name)}</td>
+                    <td class="p-4 text-gray-300">
+                       <div class="flex flex-wrap gap-1">
+                         ${classes.map(c => `<span class="px-1.5 py-0.5 bg-ocean-900 rounded text-xs text-ocean-400 border border-ocean-700">${escapeHtml(c.name)}</span>`).join('')}
+                       </div>
+                    </td>
+                    <td class="p-4 text-gray-300">
+                       <span class="text-xs">${members.length} members</span>
+                       <div class="text-[10px] text-ocean-500 mt-1 max-w-xs truncate" title="${members.map(m => m.name).join(', ')}">
+                          ${members.slice(0, 3).map(m => m.name).join(', ')}${members.length > 3 ? '...' : ''}
+                       </div>
+                    </td>
+                    <td class="p-4 text-right">
+                       <button class="delete-btn px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 border border-red-500/20 rounded-lg text-xs font-medium transition-all" data-type="org" data-id="${o.id}">Delete</button>
+                    </td>
+                 </tr>`;
+      }).join('')}
+            </tbody>
+         </table>
+       </div>
+    </section>
+
+    <!-- Classes Table -->
+    <section class="bg-ocean-800 rounded-xl shadow-xl overflow-hidden border border-ocean-700">
+      <div class="p-6 border-b border-ocean-700">
+         <h3 class="text-xl font-bold text-white mb-1">📚 Classes</h3>
+      </div>
+      <div class="p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+         ${classesRes.rows.map(c => `
+         <div class="bg-ocean-900/50 p-4 rounded-lg border border-ocean-700 hover:border-ocean-500 transition-colors flex justify-between items-start group">
+            <div>
+               <div class="font-bold text-white text-sm">${escapeHtml(c.name)}</div>
+               <div class="text-xs text-ocean-400 mt-1">${escapeHtml(classMap[c.id]?.orgName)}</div>
+            </div>
+            <button class="delete-btn opacity-0 group-hover:opacity-100 px-2 py-1 bg-red-900/20 hover:bg-red-900/40 text-red-400 rounded text-xs transition-opacity" data-type="class" data-id="${c.id}">
+              🗑️
+            </button>
+         </div>`).join('')}
+      </div>
+    </section>
+
+  </main>
+  
+  <script src="/dev-view/script.js"></script>
+</body>
+</html>`;
       res.set('Content-Type', 'text/html');
       res.send(html);
     } catch (e) {
@@ -528,6 +709,55 @@ if (devRoutesEnabled) {
       +      // Forward to global error handler so devs see the pretty error page with stack
         +      next(e);
     }
+  });
+
+  // Serve external JS for dev view to comply with CSP (no inline scripts)
+  app.get('/dev-view/script.js', (req, res) => {
+    // Small, self-contained script to handle deletes
+    res.set('Content-Type', 'application/javascript');
+    res.set('Cache-Control', 'no-store');
+    res.send(`(function(){
+      window.devDelete = async function(btn){
+        try{
+          var type = btn.dataset.type;
+          var id = btn.dataset.id;
+          console.log('devDelete calling', { type, id });
+          
+          const ok = confirm('Delete '+type+' ID '+id+'? This is irreversible. Click OK to continue.');
+          if(!ok) return;
+          
+          const token = prompt('Type DELETE to confirm', '');
+          if(token !== 'DELETE'){ alert('Confirmation failed'); return; }
+          
+          btn.disabled = true; 
+          btn.dataset.orig = btn.innerText; 
+          btn.innerText = 'Deleting...';
+          
+          const r = await fetch('/dev-view/delete', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetType: type, id: id, confirm: 'DELETE' }) });
+          let j = {};
+          try{ j = await r.json(); } catch(e){ console.warn('Response not JSON', e); }
+          
+          if(!r.ok) return alert('Delete failed: ' + (j.error || j.details || JSON.stringify(j) || r.statusText));
+          setTimeout(function() { window.location.reload(); }, 500);
+        }catch(e){ console.error('devDelete error', e); alert('Request failed: ' + e.message); }
+        finally{ if(btn){ btn.disabled = false; btn.innerText = btn.dataset.orig || 'Delete'; } }
+      }
+
+      // Add onclick handlers to all delete buttons on load
+      function bindButtons() {
+        var btns = document.querySelectorAll('.delete-btn');
+        btns.forEach(function(btn){
+           btn.onclick = function() { window.devDelete(this); };
+        });
+      }
+      
+      if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bindButtons);
+      else bindButtons();
+
+      window.devProcessSupabaseQueue = async function(){ try{ const r = await fetch('/dev-view/process-supabase-queue', { method: 'POST', credentials: 'same-origin' }); const j = await r.json(); console.log('process supa queue', j); alert('Processed: ' + (j.processed || 0)); setTimeout(function(){ window.location.reload() }, 500); } catch(e){ console.error('devProcessSupabaseQueue failed', e); alert('Error: ' + e.message); } }
+      var qBtn = document.getElementById('process-supa-queue');
+      if(qBtn) qBtn.onclick = function() { if(confirm('Run supabase sync queue now?')) window.devProcessSupabaseQueue(); };
+    })();`);
   });
 
   // Allow developer to delete entities (protected)
@@ -626,49 +856,49 @@ if (devRoutesEnabled) {
     // Small, self-contained script to handle deletes
     res.set('Content-Type', 'application/javascript');
     res.set('Cache-Control', 'no-store');
-    res.send(`(function(){
-      window.devDelete = async function(btn){
-        try{
+    res.send(`(function () {
+      window.devDelete = async function (btn) {
+        try {
           var type = btn.dataset.type;
           var id = btn.dataset.id;
           console.log('devDelete calling', { type, id });
-          
-          const ok = confirm('Delete '+type+' ID '+id+'? This is irreversible. Click OK to continue.');
-          if(!ok) return;
-          
+
+          const ok = confirm('Delete ' + type + ' ID ' + id + '? This is irreversible. Click OK to continue.');
+          if (!ok) return;
+
           const token = prompt('Type DELETE to confirm', '');
-          if(token !== 'DELETE'){ alert('Confirmation failed'); return; }
-          
-          btn.disabled = true; 
-          btn.dataset.orig = btn.innerText; 
+          if (token !== 'DELETE') { alert('Confirmation failed'); return; }
+
+          btn.disabled = true;
+          btn.dataset.orig = btn.innerText;
           btn.innerText = 'Deleting...';
-          
+
           const r = await fetch('/dev-view/delete', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetType: type, id: id, confirm: 'DELETE' }) });
           let j = {};
-          try{ j = await r.json(); } catch(e){ console.warn('Response not JSON', e); }
-          
-          if(!r.ok) return alert('Delete failed: ' + (j.error || j.details || JSON.stringify(j) || r.statusText));
-          alert('Deleted successfully');
-          window.location.reload();
-        }catch(e){ console.error('devDelete error', e); alert('Request failed: ' + e.message); }
-        finally{ if(btn){ btn.disabled = false; btn.innerText = btn.dataset.orig || 'Delete'; } }
+          try { j = await r.json(); } catch (e) { console.warn('Response not JSON', e); }
+
+          if (!r.ok) return alert('Delete failed: ' + (j.error || j.details || JSON.stringify(j) || r.statusText));
+          // alert('Deleted successfully'); // Remove annoying alert
+          setTimeout(function () { window.location.reload(); }, 500);
+        } catch (e) { console.error('devDelete error', e); alert('Request failed: ' + e.message); }
+        finally { if (btn) { btn.disabled = false; btn.innerText = btn.dataset.orig || 'Delete'; } }
       }
 
       // Add onclick handlers to all delete buttons on load
       function bindButtons() {
         var btns = document.querySelectorAll('.delete-btn');
-        btns.forEach(function(btn){
-           btn.onclick = function() { window.devDelete(this); };
+        btns.forEach(function (btn) {
+          btn.onclick = function () { window.devDelete(this); };
         });
       }
-      
-      if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bindButtons);
+
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bindButtons);
       else bindButtons();
 
-      window.devProcessSupabaseQueue = async function(){ try{ const r = await fetch('/dev-view/process-supabase-queue', { method: 'POST', credentials: 'same-origin' }); const j = await r.json(); console.log('process supa queue', j); alert('Processed: ' + (j.processed || 0)); window.location.reload(); } catch(e){ console.error('devProcessSupabaseQueue failed', e); alert('Error: ' + e.message); } }
+      window.devProcessSupabaseQueue = async function () { try { const r = await fetch('/dev-view/process-supabase-queue', { method: 'POST', credentials: 'same-origin' }); const j = await r.json(); console.log('process supa queue', j); alert('Processed: ' + (j.processed || 0)); setTimeout(function () { window.location.reload() }, 500); } catch (e) { console.error('devProcessSupabaseQueue failed', e); alert('Error: ' + e.message); } }
       var qBtn = document.getElementById('process-supa-queue');
-      if(qBtn) qBtn.onclick = function() { if(confirm('Run supabase sync queue now?')) window.devProcessSupabaseQueue(); };
-    })();`);
+      if (qBtn) qBtn.onclick = function () { if (confirm('Run supabase sync queue now?')) window.devProcessSupabaseQueue(); };
+    })(); `);
   });
 
   // JSON endpoint to quickly inspect local users and Supabase status
@@ -696,7 +926,7 @@ app.post('/api/py/check-email', async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ detail: "Email required" });
 
-  logger.info(`py/check-email called for email=${email} origin=${req.get('origin') || 'none'} supabaseConfigured=${!!supabase} dev=${devRoutesEnabled}`);
+  logger.info(`py / check - email called for email = ${email} origin = ${req.get('origin') || 'none'} supabaseConfigured = ${!!supabase} dev = ${devRoutesEnabled} `);
 
   try {
     let exists = false;
@@ -734,7 +964,7 @@ app.post('/api/py/check-email', async (req, res) => {
       }
     }
 
-    logger.info(`py/check-email: result for ${email} exists=${exists} source=${debugSource}`);
+    logger.info(`py / check - email: result for ${email} exists = ${exists} source = ${debugSource} `);
     res.json({ exists });
   } catch (e) {
     logger.error('Error in check-email:', e);
@@ -1032,7 +1262,7 @@ const appendOutbox = (mail) => {
   const cur = readJsonFile(OUTBOX_FILE);
   // Ensure consistent metadata for audited status / retries
   const entry = {
-    id: `out_${Date.now()}`,
+    id: `out_${Date.now()} `,
     to: mail.to,
     subject: mail.subject,
     text: mail.text,
@@ -1050,7 +1280,7 @@ const appendInbound = (obj) => {
   try {
     const file = path.join(DATA_DIR, 'inbound.json');
     const cur = readJsonFile(file);
-    const entry = { id: `in_${Date.now()}`, ...obj, receivedAt: new Date().toISOString() };
+    const entry = { id: `in_${Date.now()} `, ...obj, receivedAt: new Date().toISOString() };
     cur.unshift(entry);
     writeJsonFile(file, cur);
     return entry;
@@ -1065,7 +1295,7 @@ const appendSignupQueueDisk = async (signupData) => {
   try {
     const cur = readJsonFile(QUEUE_FILE);
     const entry = {
-      id: `signup_${Date.now()}`,
+      id: `signup_${Date.now()} `,
       name: signupData.name,
       email: signupData.email,
       password_hash: signupData.password_hash,
@@ -1078,11 +1308,11 @@ const appendSignupQueueDisk = async (signupData) => {
     };
     cur.unshift(entry);
     writeJsonFile(QUEUE_FILE, cur);
-    logger.info(`Signup queued to disk: ${signupData.email}`);
+    logger.info(`Signup queued to disk: ${signupData.email} `);
 
     // Fire-and-forget: attempt to upload a backup of the queue to GCS so data survives machine loss
     try {
-      const destName = `backups/signup_queue_disk_${Date.now()}.json`;
+      const destName = `backups / signup_queue_disk_${Date.now()}.json`;
       // upload the local queue file as a backup (non-blocking)
       cloudStorage.uploadFile(QUEUE_FILE, destName).catch(err => {
         logger.warn('Failed uploading signup queue backup to GCS', err?.message || err);
@@ -1103,7 +1333,7 @@ const appendSupabaseSyncQueue = async (obj) => {
   try {
     const cur = readJsonFile(SUPABASE_SYNC_FILE);
     const entry = {
-      id: `supa_${Date.now()}`,
+      id: `supa_${Date.now()} `,
       action: obj.action || 'create_user',
       payload: obj.payload || {},
       localUserId: obj.localUserId || null,
@@ -2729,16 +2959,16 @@ app.post('/api/login', async (req, res, next) => {
     if (!validation.success) {
       return res.status(400).json({ error: validation.error.errors[0].message });
     }
-
+ 
     const { email, password, role = 'Management', extra, twoFactorToken } = req.body;
-
+ 
     const r = await pool.query('SELECT id,name,email,password_hash,role,extra,created_at,two_factor_secret,is_verified FROM users WHERE LOWER(email)=LOWER($1) AND role=$2', [email, role]);
     if (!r.rows.length) return res.status(404).json({ error: 'Unregistered email' });
-
+ 
     const u = r.rows[0];
     const ok = await bcrypt.compare(password, u.password_hash || '');
     if (!ok) return res.status(401).json({ error: 'Wrong password' });
-
+ 
     // Check unique code
     if (extra && extra.uniqueId) {
       const storedUniqueId = u.extra && u.extra.uniqueId;
@@ -2746,7 +2976,7 @@ app.post('/api/login', async (req, res, next) => {
         return res.status(401).json({ error: 'Wrong unique code' });
       }
     }
-
+ 
     // Check 2FA
     if (u.two_factor_secret) {
       if (!twoFactorToken) {
@@ -2755,11 +2985,11 @@ app.post('/api/login', async (req, res, next) => {
       const verified = authenticator.check(twoFactorToken, u.two_factor_secret);
       if (!verified) return res.status(401).json({ error: 'Invalid 2FA token' });
     }
-
+ 
     // Generate Tokens
     const accessToken = generateAccessToken(u);
     const refreshToken = generateRefreshToken(u);
-
+ 
     // Set Cookies
     const cookieSameSite = process.env.NODE_ENV === 'production' ? 'none' : 'lax';
     const cookieSecure = process.env.NODE_ENV === 'production';
@@ -2769,14 +2999,14 @@ app.post('/api/login', async (req, res, next) => {
       sameSite: cookieSameSite,
       maxAge: 15 * 60 * 1000 // 15m
     });
-
+ 
     res.cookie('refreshToken', refreshToken, {
       httpOnly: true,
       secure: cookieSecure,
       sameSite: cookieSameSite,
       maxAge: 7 * 24 * 60 * 60 * 1000 // 7d
     });
-
+ 
     delete u.password_hash;
     delete u.two_factor_secret; // Don't send secret to client
     res.json({ success: true, user: u });

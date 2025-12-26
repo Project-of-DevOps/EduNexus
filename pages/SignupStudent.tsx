@@ -32,7 +32,7 @@ const SignupStudent: React.FC = () => {
         setError('');
         try {
             const apiUrl = getApiUrl();
-            const res = await axios.get(`${apiUrl}/api/public/classes?org_code=${formData.org_code}`);
+            const res = await axios.get(`${apiUrl}/api/auth-strict/public/classes?org_code=${formData.org_code}`);
             setClasses(res.data);
             if (res.data.length === 0) setError('No classes found for this code.');
         } catch (err: any) {
@@ -66,17 +66,14 @@ const SignupStudent: React.FC = () => {
             }
 
             const payload = {
+                username: formData.email,
                 name: formData.name,
-                email: formData.email,
                 password: formData.password,
-                role: 'Student',
-                extra: {
-                    uniqueId: formData.org_code,
-                    classId: formData.class_id
-                }
+                org_code: formData.org_code,
+                class_id: formData.class_id
             };
 
-            await axios.post(`${apiUrl}/api/signup`, payload);
+            await axios.post(`${apiUrl}/api/auth-strict/signup/student`, payload);
             setSuccess('Signup successful! Redirecting to login...');
             setTimeout(() => navigate('/login'), 2000);
         } catch (err: any) {
