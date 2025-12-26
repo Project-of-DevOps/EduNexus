@@ -773,6 +773,7 @@ if (devRoutesEnabled) {
     if (confirm !== 'DELETE') return res.status(400).json({ error: 'confirmation required (set confirm: "DELETE")' });
 
     const client = await pool.connect();
+    let supaNote = '';
     try {
       await client.query('BEGIN');
       if (targetType === 'user') {
@@ -828,20 +829,21 @@ if (devRoutesEnabled) {
             if (r1.error) throw r1.error;
           }
         } catch (se) {
-          await client.query('ROLLBACK');
-          logger.error('Supabase deletion failed - rolled back local changes', se?.message || se);
-          return res.status(500).json({ error: 'Supabase deletion failed', details: String(se?.message || se) });
+          // SOFT FAIL: If Supabase fails, don't rollback local delete. Just warn.
+          logger.error('Supabase deletion failed/skipped (soft fail) - continuing with local delete', se?.message || se);
+          supaNote = 'Supabase deletion failed: ' + String(se?.message || se);
         }
+
       }
 
       await client.query('COMMIT');
 
       // If Supabase unavailable, include note
       if (!isSupabaseAvailable()) {
-        return res.json({ success: true, deleted: { targetType, id }, note: 'Supabase unavailable; local deletion committed and will require manual cleanup.' });
+        if (!supaNote) supaNote = 'Supabase unavailable; local deletion committed.';
       }
 
-      return res.json({ success: true, deleted: { targetType, id } });
+      return res.json({ success: true, deleted: { targetType, id }, note: supaNote || undefined });
     } catch (e) {
       await client.query('ROLLBACK');
       logger.error('Dev delete failed', e?.message || e);
